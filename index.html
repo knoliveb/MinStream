@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="apple-touch-icon" href="logo.png">
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-title" content="MinStream">
+  <meta name="application-name" content="MinStream">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="msapplication-TileImage" content="logo.png">
+  <meta name="msapplication-TileColor" content="#0a0a0a">
+  <title>MinStream</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="dns-prefetch" href="https://www.youtube.com">
+  <link rel="dns-prefetch" href="https://i.ytimg.com">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Backdrop do modo expandido -->
+  <div id="theater-backdrop"></div>
+
+  <!-- Player expandido: tres modos de visualizacao -->
+  <div id="expanded-player" data-mode="video">
+    <div class="exp-topbar">
+      <div class="exp-context" id="exp-context">Tocando agora</div>
+      <div class="exp-tabs">
+        <button class="exp-tab active" data-mode="video" title="Exibir o video em execucao">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
+          Video
+        </button>
+        <button class="exp-tab" data-mode="cover" title="Capa estatica (o audio continua)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+          Capa
+        </button>
+        <button class="exp-tab" data-mode="queue" title="Lista de reproducao">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="15" y2="6" stroke-linecap="round"/><line x1="4" y1="11" x2="15" y2="11" stroke-linecap="round"/><line x1="4" y1="16" x2="11" y2="16" stroke-linecap="round"/><path d="M17 10.5l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
+          Fila
+        </button>
+      </div>
+      <button id="exp-close" title="Fechar (Esc)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="exp-stage" id="exp-stage">
+      <!-- Modo video: o container #video-cover e posicionado sobre este palco -->
+      <div class="exp-cover-view">
+        <div class="exp-cover-img-wrap">
+          <img id="exp-cover-img" src="" alt="">
+          <button class="exp-cover-info-btn" id="exp-cover-info-btn" title="Ver informacoes">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>
+          </button>
+          <div class="exp-cover-info-panel hidden" id="exp-cover-info-panel">
+            <div class="exp-cover-info-item">
+              <span class="exp-cover-info-label">Titulo</span>
+              <span class="exp-cover-info-value" id="exp-cover-info-title"></span>
+            </div>
+            <div class="exp-cover-info-item">
+              <span class="exp-cover-info-label">Artista</span>
+              <span class="exp-cover-info-value" id="exp-cover-info-artist"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="exp-queue-view">
+        <ul class="queue-items" id="exp-queue-items"></ul>
+      </div>
+    </div>
+    <div class="exp-related" id="exp-related">
+      <h3>Videoclipes relacionados</h3>
+      <div class="exp-related-row" id="exp-related-row"></div>
+    </div>
+  </div>
+
+  <!-- Video cover: filho do body para evitar stacking context do #app -->
+  <!-- Posicionado via CSS no dock (normal) ou sobre o .exp-stage (theater) -->
+  <div id="video-cover">
+    <img id="player-cover" src="" alt="">
+    <div id="yt-player-div">
+      <div id="yt-player-target"></div>
+    </div>
+
+  </div>
+
+  <!-- Painel da fila (playlists do YouTube) -->
+  <aside id="queue-panel" class="hidden">
+    <div class="queue-header">
+      <div class="queue-header-text">
+        <span class="queue-title" id="queue-title">Fila</span>
+        <span class="queue-subtitle" id="queue-subtitle"></span>
+      </div>
+      <button id="queue-close" title="Fechar fila">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <ul class="queue-items" id="queue-items"></ul>
+  </aside>
+
+  <!-- Background particles canvas -->
+  <canvas id="bg-particles"></canvas>
+
+  <!-- Main app -->
+  <div id="app">
+    <!-- Barra superior -->
+    <header id="topbar">
+      <div class="tb-brand">
+        <img src="logo.png" alt="minstream" class="brand-logo-img">
+        <span class="brand-name">MinStream</span>
+      </div>
+      <div class="tb-center">
+        <button class="tb-btn" id="tb-home" title="Inicio">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 3.1L3 10v11h6v-7h6v7h6V10l-9-6.9z"/></svg>
+        </button>
+        <div class="tb-search" id="tb-search-wrap">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg>
+          <input type="text" id="global-search" placeholder="O que você quer ouvir?" autocomplete="off" spellcheck="false">
+          <button class="search-clear-btn hidden" id="search-clear-btn" title="Limpar">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
+          </button>
+          <div class="search-recent-dropdown hidden" id="search-recent-dropdown"></div>
+        </div>
+      </div>
+      <div class="tb-right">
+        <button class="tb-btn" id="tb-profile" title="Perfil">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="app-body">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <nav class="nav-main">
+        <button class="nav-btn active" data-view="home">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          Inicio
+        </button>
+        <button class="nav-btn" data-view="search">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg>
+          Buscar
+        </button>
+        <button class="nav-btn" data-view="library">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+          Biblioteca
+        </button>
+      </nav>
+
+      <div class="divider"></div>
+
+      <div class="nav-quick">
+        <button class="nav-btn" id="btn-liked">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+          Curtidas
+        </button>
+        <button class="nav-btn" id="btn-recent">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg>
+          Recentes
+        </button>
+        <button class="nav-btn" id="btn-saved">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>
+          Salvos
+        </button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="playlists-header">Playlists</div>
+      <div class="nav-playlists" id="playlist-nav"></div>
+
+      <div class="sidebar-footer">
+        <button class="nav-btn" data-view="profile">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          Perfil
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main content area -->
+    <main id="main-content">
+      <!-- Views rendered by JS -->
+    </main>
+    </div><!-- /app-body -->
+
+    <!-- Player Dock -->
+    <footer id="player-dock">
+      <!-- Controls -->
+      <div class="player-row">
+        <!-- Track info (esquerda) -->
+        <div class="player-info">
+          <!-- #video-cover foi movido para o body (fora do #app) -->
+          <!-- placeholder para manter o layout -->
+          <div class="player-meta">
+            <div class="player-title" id="player-title"></div>
+            <div class="player-artist" id="player-artist"></div>
+          </div>
+          <!-- VU Meter canvas -->
+          <canvas id="vu-meter" width="180" height="50"></canvas>
+        </div>
+
+        <!-- Center controls: Like | Shuffle | Prev | Play | Next | Repeat | Queue -->
+        <div class="player-center">
+          <div class="ctrl-row">
+            <button class="ctrl-btn" id="btn-like" title="Curtir (L)">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            </button>
+            <button class="ctrl-btn" id="btn-shuffle" title="Aleatorio (S)">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8" stroke-linecap="round" stroke-linejoin="round"/><line x1="4" y1="20" x2="21" y2="3" stroke-linecap="round"/><polyline points="21 16 21 21 16 21" stroke-linecap="round" stroke-linejoin="round"/><line x1="15" y1="15" x2="21" y2="21" stroke-linecap="round"/><line x1="4" y1="4" x2="9" y2="9" stroke-linecap="round"/></svg>
+            </button>
+            <button class="ctrl-btn" id="btn-prev" title="Anterior (Shift+Left)">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+            </button>
+            <button class="ctrl-play" id="btn-play">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" id="icon-play"><path d="M8 5v14l11-7z"/></svg>
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" id="icon-pause" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <button class="ctrl-btn" id="btn-next" title="Proximo (Shift+Right)">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+            </button>
+            <button class="ctrl-btn" id="btn-repeat" title="Repetir (R)">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" id="icon-repeat"><polyline points="17 1 21 5 17 9" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11V9a4 4 0 014-4h14" stroke-linecap="round"/><polyline points="7 23 3 19 7 15" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 13v2a4 4 0 01-4 4H3" stroke-linecap="round"/></svg>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" id="icon-repeat1" style="display:none"><polyline points="17 1 21 5 17 9" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11V9a4 4 0 014-4h14" stroke-linecap="round"/><polyline points="7 23 3 19 7 15" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 13v2a4 4 0 01-4 4H3" stroke-linecap="round"/><text x="10" y="15" font-size="8" fill="currentColor" font-family="monospace">1</text></svg>
+            </button>
+            <button class="ctrl-btn" id="btn-queue" title="Fila (Q)">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="15" y2="6" stroke-linecap="round"/><line x1="4" y1="11" x2="15" y2="11" stroke-linecap="round"/><line x1="4" y1="16" x2="11" y2="16" stroke-linecap="round"/><path d="M17 10.5l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
+            </button>
+          </div>
+          <div class="progress-row">
+            <span class="time-label" id="time-current">0:00</span>
+            <div class="progress-container" id="progress-container">
+              <div class="progress-bar" id="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+                <div class="progress-handle" id="progress-handle"></div>
+              </div>
+            </div>
+            <span class="time-label" id="time-total">-0:00</span>
+          </div>
+        </div>
+
+        <!-- Right controls -->
+        <div class="player-right">
+          <button class="ctrl-btn" id="btn-mute" title="Mudo (M)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" id="icon-vol"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" id="icon-mute" style="display:none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15" stroke-linecap="round"/><line x1="17" y1="9" x2="23" y2="15" stroke-linecap="round"/></svg>
+          </button>
+          <input type="range" class="volume-slider" id="volume-slider" min="0" max="100" value="80">
+          <button class="ctrl-btn" id="btn-expand" title="Expandir player (T)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+          </button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Help tooltip -->
+  <div class="help-overlay" id="help-overlay" style="display:none">
+    <div class="help-backdrop"></div>
+    <div class="help-modal">
+      <h3>Atalhos de Teclado</h3>
+      <div class="help-grid">
+        <div><kbd>Space</kbd><span>Play / Pausa</span></div>
+        <div><kbd>Shift + &#8592;</kbd><span>Anterior</span></div>
+        <div><kbd>Shift + &#8594;</kbd><span>Proximo</span></div>
+        <div><kbd>M</kbd><span>Mudo</span></div>
+        <div><kbd>S</kbd><span>Aleatorio</span></div>
+        <div><kbd>R</kbd><span>Repetir</span></div>
+        <div><kbd>L</kbd><span>Curtir</span></div>
+        <div><kbd>T</kbd><span>Expandir player</span></div>
+        <div><kbd>Q</kbd><span>Mostrar fila</span></div>
+        <div><kbd>?</kbd><span>Esta ajuda</span></div>
+      </div>
+      <button class="help-close" id="help-close">Fechar</button>
+    </div>
+  </div>
+
+  <!-- Motor de recomendacao: precisa vir ANTES de app.js -->
+  <script src="recommendations.js"></script>
+  <script src="app.js"></script>
+  <!-- YouTube IFrame API loaded AFTER app.js so the ready callback already exists -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
