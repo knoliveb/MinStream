@@ -56,7 +56,7 @@
           </button>
           <div class="exp-cover-info-panel hidden" id="exp-cover-info-panel">
             <div class="exp-cover-info-item">
-              <span class="exp-cover-info-label">Titulo</span>
+              <span class="exp-cover-info-label">Título</span>
               <span class="exp-cover-info-value" id="exp-cover-info-title"></span>
             </div>
             <div class="exp-cover-info-item">
@@ -79,6 +79,10 @@
   <!-- Video cover: filho do body para evitar stacking context do #app -->
   <!-- Posicionado via CSS no dock (normal) ou sobre o .exp-stage (theater) -->
   <div id="video-cover">
+    <div id="player-placeholder">
+      <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      <span>Play</span>
+    </div>
     <img id="player-cover" src="" alt="">
     <div id="yt-player-div">
       <div id="yt-player-target"></div>
@@ -112,9 +116,6 @@
         <span class="brand-name">MinStream</span>
       </div>
       <div class="tb-center">
-        <button class="tb-btn" id="tb-home" title="Inicio">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 3.1L3 10v11h6v-7h6v7h6V10l-9-6.9z"/></svg>
-        </button>
         <div class="tb-search" id="tb-search-wrap">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg>
           <input type="text" id="global-search" placeholder="O que você quer ouvir?" autocomplete="off" spellcheck="false">
@@ -125,9 +126,6 @@
         </div>
       </div>
       <div class="tb-right">
-        <button class="tb-btn" id="tb-profile" title="Perfil">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        </button>
       </div>
     </header>
 
@@ -137,34 +135,17 @@
       <nav class="nav-main">
         <button class="nav-btn active" data-view="home">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          Inicio
+          <span class="nav-label">Inicio</span>
         </button>
         <button class="nav-btn" data-view="search">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg>
-          Buscar
+          <span class="nav-label">Buscar</span>
         </button>
         <button class="nav-btn" data-view="library">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
-          Biblioteca
+          <span class="nav-label">Biblioteca</span>
         </button>
       </nav>
-
-      <div class="divider"></div>
-
-      <div class="nav-quick">
-        <button class="nav-btn" id="btn-liked">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-          Curtidas
-        </button>
-        <button class="nav-btn" id="btn-recent">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg>
-          Recentes
-        </button>
-        <button class="nav-btn" id="btn-saved">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>
-          Salvos
-        </button>
-      </div>
 
       <div class="divider"></div>
 
@@ -174,7 +155,7 @@
       <div class="sidebar-footer">
         <button class="nav-btn" data-view="profile">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          Perfil
+          <span class="nav-label">Perfil</span>
         </button>
       </div>
     </aside>

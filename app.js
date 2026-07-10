@@ -55,6 +55,83 @@ const state = {
   apiReady: false,
 };
 
+// ============================================
+// PERSISTENCIA DA ULTIMA MUSICA
+// ============================================
+const LAST_TRACK_KEY = 'minstream_last_track';
+
+function saveLastTrack() {
+  if (!state.currentTrack) return;
+  try {
+    const data = {
+      track: state.currentTrack,
+      queue: state.queue,
+      queueIndex: state.queueIndex,
+      currentPlaylist: state.currentPlaylist,
+      currentTime: state.currentTime,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(LAST_TRACK_KEY, JSON.stringify(data));
+  } catch (_) {}
+}
+
+function loadLastTrack() {
+  try {
+    const raw = localStorage.getItem(LAST_TRACK_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_) { return null; }
+}
+
+function clearLastTrack() {
+  try { localStorage.removeItem(LAST_TRACK_KEY); } catch (_) {}
+}
+
+// ============================================
+// TRANSICAO AUTO: CAPA -> VIDEO (7s)
+// ============================================
+let autoVideoTimer = null;
+
+function startAutoVideoTimer() {
+  // Cancela timer anterior se existir
+  if (autoVideoTimer) {
+    clearTimeout(autoVideoTimer);
+    autoVideoTimer = null;
+  }
+  // Inicia sempre no modo capa
+  setPlayerMode('cover');
+  // Apos 7 segundos, transiciona para video
+  autoVideoTimer = setTimeout(() => {
+    autoVideoTimer = null;
+    if (state.currentTrack && state.isPlaying) {
+      setPlayerMode('video');
+    }
+  }, 7000);
+}
+
+function cancelAutoVideoTimer() {
+  if (autoVideoTimer) {
+    clearTimeout(autoVideoTimer);
+    autoVideoTimer = null;
+  }
+}
+
+// Detecta quando um NOVO video comeca a tocar (em playlist ou nao, incluindo
+// o avanco automatico nativo do YouTube) e reaplica o padrao capa -> video.
+// Assim o comportamento vale para todos os videos, e nao so o primeiro.
+let autoTimerVideoId = null;
+function checkAutoVideoOnTrackChange() {
+  if (!ytPlayer || !state.apiReady) return;
+  try {
+    const vd = ytPlayer.getVideoData();
+    const vid = vd && vd.video_id;
+    if (vid && vid !== autoTimerVideoId) {
+      autoTimerVideoId = vid;
+      startAutoVideoTimer();
+    }
+  } catch (_) {}
+}
+
 function getTrack(id) { return TRACKS.find(t => t.id === id); }
 function fmtTime(s) { return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
 
@@ -147,6 +224,8 @@ async function playFromUrl(url) {
   clearPlayerError();
   loadTrack(track);
   updatePlayerUI();
+  saveLastTrack();
+  startAutoVideoTimer();
   showToast(`Tocando: ${title}`);
 }
 
@@ -190,11 +269,11 @@ const isFileProtocol = window.location.protocol === 'file:';
 const YT_ERROR_MESSAGES = {
   2:   'Parametro invalido (ID do video incorreto).',
   5:   'Erro no player HTML5.',
-  100: 'Video nao encontrado ou privado.',
+  100: 'Video não encontrado ou privado.',
   101: 'O dono do video bloqueou a reproducao em sites externos.',
   150: 'O dono do video bloqueou a reproducao em sites externos.',
   152: 'O YouTube recusou o embed (erro 152). O video pode ter restricao de idade ou de embed.',
-  153: 'O YouTube nao recebeu o referrer da pagina (erro 153). Sirva o app por http:// em vez de abrir o arquivo diretamente.',
+  153: 'O YouTube não recebeu o referrer da pagina (erro 153). Sirva o app por http:// em vez de abrir o arquivo diretamente.',
 };
 
 /* ===== Error handling (100/101/150/152/153) ===== */
@@ -210,7 +289,7 @@ function showPlayerError(watchUrl, message) {
   overlay = document.createElement('div');
   overlay.id = 'yt-error-overlay';
   overlay.innerHTML =
-    '<p style="color:#E0E0E0;font-size:13px;font-weight:600;margin:0">Nao foi possivel reproduzir este conteudo.</p>' +
+    '<p style="color:#E0E0E0;font-size:13px;font-weight:600;margin:0">Não foi possivel reproduzir este conteudo.</p>' +
     '<p style="color:#A3A3A3;font-size:11px;margin:0">' + (message || 'O YouTube pode ter recusado o embed.') + '</p>' +
     '<a href="' + watchUrl + '" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:var(--green);color:var(--bg);text-decoration:none;border-radius:6px;font-size:12px;font-weight:600">' +
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>' +
@@ -301,8 +380,8 @@ function showFileProtocolNotice() {
   notice.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
   notice.innerHTML =
     '<div style="max-width:520px;background:var(--surface,#141414);border:1px solid var(--border,#2a2a2a);border-radius:12px;padding:28px;text-align:left">' +
-      '<h2 style="margin:0 0 12px;font-size:16px;color:#E0E0E0">O player do YouTube nao funciona via file://</h2>' +
-      '<p style="margin:0 0 8px;font-size:13px;color:#A3A3A3;line-height:1.6">Voce abriu o <code>index.html</code> diretamente. Nesse modo o navegador nao envia o referrer e o YouTube bloqueia o embed (erro 153). Inicie um servidor local na pasta do projeto:</p>' +
+      '<h2 style="margin:0 0 12px;font-size:16px;color:#E0E0E0">O player do YouTube não funciona via file://</h2>' +
+      '<p style="margin:0 0 8px;font-size:13px;color:#A3A3A3;line-height:1.6">Você abriu o <code>index.html</code> diretamente. Nesse modo o navegador não envia o referrer e o YouTube bloqueia o embed (erro 153). Inicie um servidor local na pasta do projeto:</p>' +
       '<pre style="background:#000;border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:12px;color:#0AE448;overflow:auto;margin:12px 0">python -m http.server 8000</pre>' +
       '<p style="margin:0 0 8px;font-size:13px;color:#A3A3A3;line-height:1.6">ou, se tiver Node.js:</p>' +
       '<pre style="background:#000;border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:12px;color:#0AE448;overflow:auto;margin:12px 0">npx serve .</pre>' +
@@ -328,6 +407,7 @@ function onPlayerReady() {
 function onPlayerStateChange(event) {
   // States: -1=unstarted, 0=ended, 1=playing, 2=paused, 3=buffering, 5=cued
   if (event.data === 0) {
+    cancelAutoVideoTimer();
     if (state.repeatMode === 'one') {
       // Em playlist, replay do item atual evita que o embed pule para o proximo
       if (state.currentPlaylist && ytQueueIndex >= 0) {
@@ -445,6 +525,7 @@ function startPoll() {
         state.duration = ytPlayer.getDuration() || 0;
         updatePlayerUI();
       } catch (_) {}
+      checkAutoVideoOnTrackChange();
       pollPlaylistInfo();
     }
   }, 500);
@@ -480,6 +561,11 @@ let isExpanded = false;
 //  'cover' -> capa estatica do video (o audio continua)
 //  'queue' -> lista de reproducao
 function setPlayerMode(mode) {
+  // Se o usuario muda manualmente o modo, cancela o timer automatico
+  if (autoVideoTimer && mode !== state.playerMode) {
+    cancelAutoVideoTimer();
+  }
+
   state.playerMode = mode;
   try { localStorage.setItem('vibefm_player_mode', mode); } catch (_) {}
 
@@ -1078,6 +1164,8 @@ function playTrack(track, tracks) {
 
   loadTrack(track);
   updatePlayerUI();
+  saveLastTrack();
+  startAutoVideoTimer();
 }
 
 function togglePlay() {
@@ -1379,6 +1467,8 @@ function playYouTubeResult(result, results) {
   const track = materializeYtTrack(result.videoId, result.title, result.author, result.duration);
   const queue = (results || [result]).map(r => materializeYtTrack(r.videoId, r.title, r.author, r.duration));
   playTrack(track, queue);
+  saveLastTrack();
+  startAutoVideoTimer();
 }
 
 // ============================================
@@ -1631,6 +1721,7 @@ function renderSaved() {
 
   main.innerHTML = `
     <div class="section">
+      ${backButton()}
       <h2 class="section-title" style="margin-bottom:6px">Links Salvos</h2>
       <p style="font-size:12px;color:var(--text-muted);margin-bottom:20px">Videos e playlists do YouTube guardados para ouvir quando quiser.</p>
       ${items.length ? `<div class="album-grid" id="gallery-grid"></div>` : `
@@ -1721,6 +1812,21 @@ function renderSaved() {
 // ============================================
 const main = document.getElementById('main-content');
 
+// Botao "voltar uma etapa": retorna para a view de origem (por padrao, a Biblioteca)
+function backButton(targetView = 'library', label = 'Voltar') {
+  return `<button class="back-btn" data-back-to="${targetView}" title="Voltar uma etapa">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    ${label}
+  </button>`;
+}
+
+// Delegacao: qualquer .back-btn dentro do conteudo principal navega de volta.
+// Escuta no #main-content (persistente), entao funciona apos cada re-render.
+main.addEventListener('click', (e) => {
+  const btn = e.target.closest('.back-btn[data-back-to]');
+  if (btn) setView(btn.dataset.backTo);
+});
+
 function setView(view) {
   state.prevView = state.view;
   state.view = view;
@@ -1766,11 +1872,11 @@ function renderHome() {
         </div>
       </div>
       ${userPls.length ? buildCarousel('home-user-pl', 'home-user-pl-carousel')
-      : '<p style="font-size:12px;color:var(--text-muted)">Voce ainda nao criou playlists. Clique em "Nova" ou use o botao + nas faixas.</p>'}
+      : '<p style="font-size:12px;color:var(--text-muted)">Você ainda não criou playlists. Clique em "Nova" ou use o botao + nas faixas.</p>'}
     </div>
     <div class="section">
       <div class="section-header pl-home-header">
-        <h2 class="section-title">Feitas para Voce</h2>
+        <h2 class="section-title">Feitas para Você :)</h2>
         <button class="pl-action-btn" id="btn-edit-tastes" title="Editar seus gostos no Perfil">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke-linecap="round"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke-linejoin="round"/></svg>
           Editar gostos
@@ -1781,13 +1887,13 @@ function renderHome() {
     </div>
     <div class="section" id="reco-mix-section">
       <div class="section-header pl-home-header">
-        <h2 class="section-title">Mixes para Voce</h2>
+        <h2 class="section-title">Mixes para Você ;)</h2>
         <button class="pl-action-btn" id="btn-refresh-reco" title="Gerar novos mixes e novidades">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><polyline points="1 20 1 14 7 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Atualizar
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Mixes diversos a partir das suas curtidas, do que voce ouve e dos seus gostos.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Mixes diversos a partir das suas curtidas, do que você ouve e dos seus gostos.</p>
       <div class="pl-carousel-wrap" id="reco-mix-wrap">
         <button class="pl-carousel-arrow pl-carousel-prev" id="reco-mix-prev" title="Anterior"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="pl-carousel-track" id="reco-mix-carousel"><p style="font-size:12px;color:var(--text-muted)">Gerando seus mixes\u2026</p></div>
@@ -1795,8 +1901,8 @@ function renderHome() {
       </div>
     </div>
     <div class="section" id="reco-news-section" style="display:none">
-      <h2 class="section-title" style="margin-bottom:6px">Novidades para Voce</h2>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Lancamentos recentes dos artistas e generos que voce curte.</p>
+      <h2 class="section-title" style="margin-bottom:6px">Novidades para Você</h2>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Lançamentos recentes dos artistas e generos que você curte.</p>
       <div class="exp-related-row" id="reco-news-row"></div>
     </div>
   `;
@@ -2037,7 +2143,7 @@ function togglePlaylistExpand(cfg, clickedCard) {
   header.innerHTML = `
     <div>
       <div class="pl-expand-title">${escapeHtml(cfg.name)}</div>
-      <div class="pl-expand-subtitle">${cfg.tracks.length} faixa(s) \u00B7 ${cfg.isUser ? 'criada por voce' : 'baseada no seu gosto'}</div>
+      <div class="pl-expand-subtitle">${cfg.tracks.length} faixa(s) \u00B7 ${cfg.isUser ? 'criada por você' : 'baseada no seu gosto'}</div>
     </div>
     <button class="pl-expand-close" title="Fechar">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
@@ -2091,6 +2197,7 @@ function togglePlaylistExpand(cfg, clickedCard) {
 function playlistAccordionItem(cfg) {
   const wrap = document.createElement('div');
   wrap.className = 'pl-acc-item' + (expandedPlaylists.has(cfg.id) ? ' expanded' : '');
+  wrap.dataset.plId = cfg.id;
 
   const header = document.createElement('div');
   header.className = 'pl-acc-header';
@@ -2241,7 +2348,7 @@ async function performSearch(raw) {
       const playlistId = extractPlaylistId(raw);
 
       if (!videoId && !playlistId) {
-        resultsEl.innerHTML = `<div class="empty-state"><p>URL do YouTube nao reconhecida</p></div>`;
+        resultsEl.innerHTML = `<div class="empty-state"><p>URL do YouTube não reconhecida</p></div>`;
         return;
       }
 
@@ -2405,25 +2512,54 @@ function renderLibrary() {
   const userPls = UserPlaylists.load();
   main.innerHTML = `
     <div class="section">
-      <h2 class="section-title" style="margin-bottom:16px">Biblioteca</h2>
+      <h2 class="section-title" style="margin-bottom:20px">Biblioteca</h2>
+
+      <!-- Pastas: Curtidas, Recentes, Salvos -->
+      <div class="lib-folders">
+        <div class="lib-folder" id="lib-folder-liked">
+          <div class="lib-folder-icon" style="background:rgba(255,92,0,0.12)">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#FF5C00" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+          </div>
+          <div class="lib-folder-name">Curtidas</div>
+          <div class="lib-folder-count">${state.likedTracks.size} musicas</div>
+        </div>
+
+        <div class="lib-folder" id="lib-folder-recent">
+          <div class="lib-folder-icon" style="background:rgba(0,112,243,0.12)">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#0070F3" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg>
+          </div>
+          <div class="lib-folder-name">Recentes</div>
+          <div class="lib-folder-count">${state.history.length} tocadas</div>
+        </div>
+
+        <div class="lib-folder" id="lib-folder-saved">
+          <div class="lib-folder-icon" style="background:rgba(10,228,72,0.12)">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#0AE448" stroke-width="1.8"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>
+          </div>
+          <div class="lib-folder-name">Salvos</div>
+          <div class="lib-folder-count">${Gallery.load().length} links</div>
+        </div>
+      </div>
+
+      <div class="divider" style="margin:24px 0"></div>
+
+      <h3 class="section-title" style="margin-bottom:16px;font-size:18px">Suas Playlists</h3>
       <div class="pl-accordion" id="lib-accordion"></div>
     </div>
-    <div class="section" style="padding-top:0">
-      <h3 class="section-title" style="margin-bottom:12px">Atalhos</h3>
-      <div class="pl-home-actions">
-        <button class="pl-action-btn" id="lib-go-liked">Curtidas</button>
-        <button class="pl-action-btn" id="lib-go-recent">Recentes</button>
-        <button class="pl-action-btn" id="lib-go-saved">Links salvos</button>
-      </div>
-    </div>
   `;
+
+  // Event listeners das pastas
+  document.getElementById('lib-folder-liked').addEventListener('click', () => setView('liked'));
+  document.getElementById('lib-folder-recent').addEventListener('click', () => setView('recent'));
+  document.getElementById('lib-folder-saved').addEventListener('click', () => setView('saved'));
+
   const acc = document.getElementById('lib-accordion');
   if (userPls.length) {
     userPls.forEach(pl => acc.appendChild(
       playlistAccordionItem({
         id: pl.id,
         name: pl.name,
-        subtitle: pl.items.length + ' faixas \u00B7 criada por voce',
+        subtitle: pl.items.length + ' faixas \u00B7 criada por você',
         tracks: UserPlaylists.tracksOf(pl),
         isUser: true,
         cover: null,
@@ -2432,9 +2568,6 @@ function renderLibrary() {
   } else {
     acc.innerHTML = '<p style="font-size:12px;color:var(--text-muted)">Nenhuma playlist criada. Va para Inicio e clique em "Nova".</p>';
   }
-  document.getElementById('lib-go-liked').addEventListener('click', () => setView('liked'));
-  document.getElementById('lib-go-recent').addEventListener('click', () => setView('recent'));
-  document.getElementById('lib-go-saved').addEventListener('click', () => setView('saved'));
   attachTrackListeners();
 }
 
@@ -2530,6 +2663,7 @@ function renderLiked() {
   const tracks = TRACKS.filter(t => state.likedTracks.has(t.id));
   main.innerHTML = `
     <div class="section">
+      ${backButton()}
       <h2 class="section-title" style="margin-bottom:20px">Musicas Curtidas</h2>
       ${tracks.length ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg><p>Nenhuma musica curtida ainda</p></div>`}
     </div>
@@ -2549,6 +2683,7 @@ function renderRecent() {
   const tracks = state.history.slice(0, 30).map(h => getTrack(h.trackId)).filter(Boolean);
   main.innerHTML = `
     <div class="section">
+      ${backButton()}
       <div class="section-header">
         <h2 class="section-title">Tocados Recentemente</h2>
         ${state.history.length ? `<button class="pl-action-btn" id="btn-clear-recent" title="Limpar historico">
@@ -2625,12 +2760,41 @@ document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
   btn.addEventListener('click', () => setView(btn.dataset.view));
 });
 
-document.getElementById('btn-liked').addEventListener('click', () => setView('liked'));
-document.getElementById('btn-recent').addEventListener('click', () => setView('recent'));
-document.getElementById('btn-saved').addEventListener('click', () => setView('saved'));
+// Sidebar (recolhe/expande automaticamente pelo hover)
+const sidebarEl = document.getElementById('sidebar');
+
+function initSidebar() {
+  // Painel recolhido por padrao
+  sidebarEl.classList.add('collapsed');
+  sidebarEl.classList.remove('expanded');
+}
+
+// Expande quando o mouse entra e permanece expandido enquanto o mouse
+// estiver sobre o painel; recolhe assim que o mouse sai.
+sidebarEl.addEventListener('mouseenter', () => {
+  sidebarEl.classList.remove('collapsed');
+  sidebarEl.classList.add('expanded');
+});
+sidebarEl.addEventListener('mouseleave', () => {
+  sidebarEl.classList.add('collapsed');
+  sidebarEl.classList.remove('expanded');
+});
 
 // Render playlists in sidebar
 const playlistNav = document.getElementById('playlist-nav');
+
+// Abre a Biblioteca ja com a playlist expandida e rola ate ela
+function openPlaylistInLibrary(plId) {
+  expandedPlaylists.add(plId);
+  setView('library');
+  requestAnimationFrame(() => {
+    const item = document.querySelector('#lib-accordion [data-pl-id="' + plId + '"]');
+    if (item) {
+      item.classList.add('expanded');
+      item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+}
 
 function renderSidebarPlaylists() {
   const pls = UserPlaylists.load();
@@ -2639,12 +2803,9 @@ function renderSidebarPlaylists() {
     const btn = document.createElement('button');
     btn.className = 'nav-btn';
     btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>' +
-      '<span class="nav-pl-name"></span>';
+      '<span class="nav-label nav-pl-name"></span>';
     btn.querySelector('.nav-pl-name').textContent = pl.name;
-    btn.addEventListener('click', () => {
-      expandedPlaylists.add(pl.id);
-      setView('home');
-    });
+    btn.addEventListener('click', () => openPlaylistInLibrary(pl.id));
     playlistNav.appendChild(btn);
   });
 }
@@ -3094,8 +3255,6 @@ globalSearchInput.addEventListener('keydown', (e) => {
   }
 });
 
-document.getElementById('tb-home').addEventListener('click', () => setView('home'));
-document.getElementById('tb-profile').addEventListener('click', () => setView('profile'));
 document.getElementById('btn-expand').addEventListener('click', toggleExpanded);
 
 // ============================================
@@ -3106,3 +3265,30 @@ document.getElementById('btn-expand').addEventListener('click', toggleExpanded);
 if (typeof Reco !== 'undefined') Reco.hydrateLikes();
 renderSidebarPlaylists();
 renderHome();
+initSidebar();
+
+// Restaura a ultima musica reproduzida da sessao anterior
+(function restoreLastSession() {
+  const last = loadLastTrack();
+  if (!last || !last.track) return;
+
+  // Restaura a track no estado
+  state.currentTrack = last.track;
+  state.queue = last.queue || [last.track];
+  state.queueIndex = last.queueIndex || 0;
+  state.currentPlaylist = last.currentPlaylist || null;
+  state.currentTime = last.currentTime || 0;
+
+  // Adiciona a track ao TRACKS se nao existir
+  if (!TRACKS.find(t => t.id === last.track.id)) {
+    TRACKS.push(last.track);
+  }
+
+  // Carrega no player (sem autoplay — inicia pausado)
+  state.isPlaying = false;
+  loadTrack(last.track);
+  updatePlayerUI();
+
+  // Garante que o placeholder desapareca
+  videoCover.classList.add('has-video');
+})();

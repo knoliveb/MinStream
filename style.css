@@ -82,6 +82,41 @@ body {
   z-index: 1;
 }
 
+/* Placeholder quando nenhuma musica esta tocando */
+#player-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--text);
+  gap: 6px;
+  transition: opacity 0.3s ease;
+}
+
+#player-placeholder span {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+#player-placeholder svg {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* Esconde placeholder quando ha video */
+#video-cover.has-video #player-placeholder {
+  opacity: 0;
+  pointer-events: none;
+}
+
 #yt-player-div {
   position: absolute;
   inset: 0;
@@ -382,7 +417,46 @@ body.theater-open #theater-backdrop {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden; /* nunca rola na horizontal */
   flex-shrink: 0;
+  position: relative;
+  transition: width 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              min-width 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Sidebar recolhida */
+#sidebar.collapsed {
+  width: 58px;
+  min-width: 58px;
+}
+
+/* Esconde labels quando recolhida */
+#sidebar.collapsed .nav-label {
+  display: none;
+}
+
+#sidebar.collapsed .playlists-header {
+  display: none;
+}
+
+#sidebar.collapsed .divider {
+  margin: 8px;
+}
+
+/* Ajusta nav-btn quando recolhido */
+#sidebar.collapsed .nav-btn {
+  justify-content: center;
+  padding: 10px;
+  gap: 0;
+}
+
+#sidebar.collapsed .nav-btn svg {
+  margin: 0;
+}
+
+/* Padding maior do Inicio em relacao a barra superior */
+.nav-main {
+  padding: 20px 10px 0;
 }
 
 .tb-brand {
@@ -417,7 +491,7 @@ body.theater-open #theater-backdrop {
 }
 
 /* Navigation */
-.nav-main, .nav-quick, .nav-playlists {
+.nav-main, .nav-playlists {
   padding: 0 10px;
 }
 
@@ -478,6 +552,57 @@ body.theater-open #theater-backdrop {
   margin-top: auto;
   padding: 10px;
   border-top: 1px solid var(--border);
+}
+
+/* ============================================
+   PASTAS DA BIBLIOTECA (Curtidas, Recentes, Salvos)
+   ============================================ */
+.lib-folders {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.lib-folder {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.lib-folder:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.12);
+  transform: translateY(-1px);
+}
+
+.lib-folder-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.lib-folder-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-folder-count {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 /* ============================================
@@ -766,19 +891,27 @@ body.theater-open #theater-backdrop {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: transparent;
-  border: none;
+  padding: 7px 14px 7px 9px;
+  margin-bottom: 16px;
+  background: var(--surface-2, rgba(255,255,255,0.05));
   color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
   font-family: inherit;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
-  margin-bottom: 24px;
-  transition: color 0.15s;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
+.back-btn svg { transition: transform 0.15s ease; }
 
 .back-btn:hover {
-  color: var(--green);
+  color: var(--text);
+  border-color: var(--text-muted);
+  background: #2a2a2a;
 }
+.back-btn:hover svg { transform: translateX(-2px); }
+.back-btn:active { transform: scale(0.96); }
 
 .album-hero-content {
   display: flex;
