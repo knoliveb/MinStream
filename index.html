@@ -31,17 +31,21 @@
     <div class="exp-topbar">
       <div class="exp-context" id="exp-context">Tocando agora</div>
       <div class="exp-tabs">
-        <button class="exp-tab active" data-mode="video" title="Exibir o video em execucao">
+        <button class="exp-tab active" data-mode="video" title="Exibir o vídeo em execução">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
-          Video
+          Vídeo
         </button>
-        <button class="exp-tab" data-mode="cover" title="Capa estatica (o audio continua)">
+        <button class="exp-tab" data-mode="cover" title="Capa estática (o áudio continua)">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
           Capa
         </button>
-        <button class="exp-tab" data-mode="queue" title="Lista de reproducao">
+        <button class="exp-tab" data-mode="queue" title="Lista de reprodução">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="15" y2="6" stroke-linecap="round"/><line x1="4" y1="11" x2="15" y2="11" stroke-linecap="round"/><line x1="4" y1="16" x2="11" y2="16" stroke-linecap="round"/><path d="M17 10.5l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
           Fila
+        </button>
+        <button class="exp-tab" id="exp-tab-tv" title="Modo TV: vídeo em tela cheia (F)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" stroke-linejoin="round"/><polyline points="8 2 12 6 16 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          TV
         </button>
       </div>
       <button id="exp-close" title="Fechar (Esc)">
@@ -53,12 +57,12 @@
       <div class="exp-cover-view">
         <div class="exp-cover-img-wrap">
           <img id="exp-cover-img" src="" alt="">
-          <button class="exp-cover-info-btn" id="exp-cover-info-btn" title="Ver informacoes">
+          <button class="exp-cover-info-btn" id="exp-cover-info-btn" title="Ver informações">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>
           </button>
           <div class="exp-cover-info-panel hidden" id="exp-cover-info-panel">
             <div class="exp-cover-info-item">
-              <span class="exp-cover-info-label">Titulo</span>
+              <span class="exp-cover-info-label">Título</span>
               <span class="exp-cover-info-value" id="exp-cover-info-title"></span>
             </div>
             <div class="exp-cover-info-item">
@@ -89,6 +93,10 @@
     <div id="yt-player-div">
       <div id="yt-player-target"></div>
     </div>
+    <!-- Sair do Modo TV (visivel apenas em body.tv-mode) -->
+    <button id="tv-exit" title="Sair do Modo TV (Esc)">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
+    </button>
 
   </div>
 
@@ -137,7 +145,7 @@
       <nav class="nav-main">
         <button class="nav-btn active" data-view="home">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          <span class="nav-label">Inicio</span>
+          <span class="nav-label">Início</span>
         </button>
         <button class="nav-btn" data-view="search">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg>
@@ -190,7 +198,7 @@
             <button class="ctrl-btn" id="btn-like" title="Curtir (L)">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
             </button>
-            <button class="ctrl-btn" id="btn-shuffle" title="Aleatorio (S)">
+            <button class="ctrl-btn" id="btn-shuffle" title="Aleatório (S)">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8" stroke-linecap="round" stroke-linejoin="round"/><line x1="4" y1="20" x2="21" y2="3" stroke-linecap="round"/><polyline points="21 16 21 21 16 21" stroke-linecap="round" stroke-linejoin="round"/><line x1="15" y1="15" x2="21" y2="21" stroke-linecap="round"/><line x1="4" y1="4" x2="9" y2="9" stroke-linecap="round"/></svg>
             </button>
             <button class="ctrl-btn" id="btn-prev" title="Anterior (Shift+Left)">
@@ -200,7 +208,7 @@
               <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" id="icon-play"><path d="M8 5v14l11-7z"/></svg>
               <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" id="icon-pause" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
             </button>
-            <button class="ctrl-btn" id="btn-next" title="Proximo (Shift+Right)">
+            <button class="ctrl-btn" id="btn-next" title="Próximo (Shift+Right)">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
             </button>
             <button class="ctrl-btn" id="btn-repeat" title="Repetir (R)">
@@ -246,12 +254,13 @@
       <div class="help-grid">
         <div><kbd>Space</kbd><span>Play / Pausa</span></div>
         <div><kbd>Shift + &#8592;</kbd><span>Anterior</span></div>
-        <div><kbd>Shift + &#8594;</kbd><span>Proximo</span></div>
+        <div><kbd>Shift + &#8594;</kbd><span>Próximo</span></div>
         <div><kbd>M</kbd><span>Mudo</span></div>
-        <div><kbd>S</kbd><span>Aleatorio</span></div>
+        <div><kbd>S</kbd><span>Aleatório</span></div>
         <div><kbd>R</kbd><span>Repetir</span></div>
         <div><kbd>L</kbd><span>Curtir</span></div>
         <div><kbd>T</kbd><span>Expandir player</span></div>
+        <div><kbd>F</kbd><span>Modo TV (tela cheia)</span></div>
         <div><kbd>Q</kbd><span>Mostrar fila</span></div>
         <div><kbd>?</kbd><span>Esta ajuda</span></div>
       </div>
@@ -265,7 +274,7 @@
   <nav id="mobile-tabbar">
     <button class="nav-btn active" data-view="home">
       <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-      <span class="tab-label">Inicio</span>
+      <span class="tab-label">Início</span>
     </button>
     <button class="nav-btn" data-view="search">
       <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg>

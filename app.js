@@ -10,7 +10,7 @@
 const TRACKS = [];
 
 // Gostos padrao do usuario (editaveis no Perfil)
-const DEFAULT_TASTES = ['Indie', 'Synthwave', 'Rock', 'Pop', 'Musica Brasileira'];
+const DEFAULT_TASTES = ['Indie', 'Synthwave', 'Rock', 'Pop', 'Música Brasileira'];
 
 // ============================================
 // ESTADO GLOBAL
@@ -175,7 +175,7 @@ async function playFromUrl(url) {
   const playlistId = extractPlaylistId(url);
 
   if (!videoId && !playlistId) {
-    showToast('URL do YouTube invalida');
+    showToast('URL do YouTube inválida');
     return;
   }
 
@@ -289,8 +289,8 @@ function showPlayerError(watchUrl, message) {
   overlay = document.createElement('div');
   overlay.id = 'yt-error-overlay';
   overlay.innerHTML =
-    '<p style="color:#E0E0E0;font-size:13px;font-weight:600;margin:0">Nao foi possivel reproduzir este conteudo.</p>' +
-    '<p style="color:#A3A3A3;font-size:11px;margin:0">' + (message || 'O YouTube pode ter recusado o embed.') + '</p>' +
+    '<p style="color:#E0E0E0;font-size:13px;font-weight:600;margin:0">Não foi possível reproduzir este conteúdo.</p>' +
+    '<p style="color:#A3A3A3;font-size:11px;margin:0">' + (message || 'O YouTube pode ter recusado a reprodução externa.') + '</p>' +
     '<a href="' + watchUrl + '" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:var(--green);color:var(--bg);text-decoration:none;border-radius:6px;font-size:12px;font-weight:600">' +
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>' +
     'Abrir no YouTube</a>' +
@@ -336,8 +336,8 @@ window.onYouTubeIframeAPIReady = function() {
     enablejsapi: 1,
     autoplay: 0,          // autoplay real acontece via loadVideoById apos gesto do usuario
     playsinline: 1,
-    rel: 0,
-    iv_load_policy: 3,
+    rel: 0,               // AdShield: fim de video sem sugestoes promocionais de outros canais
+    iv_load_policy: 3,    // AdShield: sem anotacoes/cartoes promocionais sobre o video
     controls: 0,          // controles nativos ocultos — controle via player customizado
     disablekb: 1,         // desabilita atalhos de teclado do YouTube
     modestbranding: 1,    // minimiza logo do YouTube
@@ -354,7 +354,9 @@ window.onYouTubeIframeAPIReady = function() {
   ytPlayer = new YT.Player('yt-player-target', {
     width: '100%',
     height: '100%',
-    host: 'https://www.youtube.com',
+    // AdShield: modo de privacidade aprimorada oficial do YouTube.
+    // Sem cookies de rastreamento => sem anuncios personalizados por perfil.
+    host: 'https://www.youtube-nocookie.com',
     playerVars: playerVars,
     events: {
       onReady: onPlayerReady,
@@ -380,12 +382,12 @@ function showFileProtocolNotice() {
   notice.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
   notice.innerHTML =
     '<div style="max-width:520px;background:var(--surface,#141414);border:1px solid var(--border,#2a2a2a);border-radius:12px;padding:28px;text-align:left">' +
-      '<h2 style="margin:0 0 12px;font-size:16px;color:#E0E0E0">O player do YouTube nao funciona via file://</h2>' +
-      '<p style="margin:0 0 8px;font-size:13px;color:#A3A3A3;line-height:1.6">Voce abriu o <code>index.html</code> diretamente. Nesse modo o navegador nao envia o referrer e o YouTube bloqueia o embed (erro 153). Inicie um servidor local na pasta do projeto:</p>' +
+      '<h2 style="margin:0 0 12px;font-size:16px;color:#E0E0E0">O player do YouTube não funciona via file://</h2>' +
+      '<p style="margin:0 0 8px;font-size:13px;color:#A3A3A3;line-height:1.6">Você abriu o <code>index.html</code> diretamente. Nesse modo, o navegador não envia o referrer e o YouTube bloqueia a reprodução (erro 153). Inicie um servidor local na pasta do projeto:</p>' +
       '<pre style="background:#000;border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:12px;color:#0AE448;overflow:auto;margin:12px 0">python -m http.server 8000</pre>' +
       '<p style="margin:0 0 8px;font-size:13px;color:#A3A3A3;line-height:1.6">ou, se tiver Node.js:</p>' +
       '<pre style="background:#000;border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:12px;color:#0AE448;overflow:auto;margin:12px 0">npx serve .</pre>' +
-      '<p style="margin:0 0 16px;font-size:13px;color:#A3A3A3;line-height:1.6">Depois abra <strong style="color:#E0E0E0">http://localhost:8000</strong> no navegador. Tambem incluimos os atalhos <code>iniciar.bat</code> (Windows) e <code>iniciar.sh</code> (Mac/Linux) na pasta do projeto.</p>' +
+      '<p style="margin:0 0 16px;font-size:13px;color:#A3A3A3;line-height:1.6">Depois abra <strong style="color:#E0E0E0">http://localhost:8000</strong> no navegador. Também incluímos os atalhos <code>iniciar.bat</code> (Windows) e <code>iniciar.sh</code> (Mac/Linux) na pasta do projeto.</p>' +
       '<button id="file-notice-close" style="padding:8px 16px;background:var(--green,#0AE448);color:#000;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">Entendi, continuar mesmo assim</button>' +
     '</div>';
   document.body.appendChild(notice);
@@ -457,7 +459,7 @@ function onPlayerError(event) {
   // Se o video foi bloqueado (embed negado / nao encontrado) e ha fila local, pula para o proximo
   if ((code === 100 || code === 101 || code === 150 || code === 152) && !isFileProtocol &&
       !state.currentPlaylist && state.queue.length > 1 && state.queueIndex < state.queue.length - 1) {
-    showToast('Video bloqueado para embed — pulando para a proxima faixa...');
+    showToast('Vídeo bloqueado para reprodução externa — pulando para a próxima faixa\u2026');
     setTimeout(() => {
       if (errorShown) { clearPlayerError(); nextTrack(); }
     }, 2500);
@@ -569,7 +571,7 @@ function setPlayerMode(mode) {
   state.playerMode = mode;
   try { localStorage.setItem('vibefm_player_mode', mode); } catch (_) {}
 
-  document.querySelectorAll('.exp-tab').forEach(tab => {
+  document.querySelectorAll('.exp-tab[data-mode]').forEach(tab => {
     tab.classList.toggle('active', tab.dataset.mode === mode);
   });
   expandedPlayer.dataset.mode = mode;
@@ -770,7 +772,7 @@ function buildExpandedQueue(force) {
   if (!frag.childNodes.length) {
     const p = document.createElement('p');
     p.className = 'pl-acc-empty';
-    p.textContent = 'A fila esta vazia. Toque algo para comecar.';
+    p.textContent = 'A fila está vazia. Toque algo para começar.';
     frag.appendChild(p);
   }
   ul.replaceChildren(frag);
@@ -879,7 +881,7 @@ function toggleExpanded() {
 
 /* theater-backdrop removido no re-theme (display:none) - backdrop eh o proprio expanded-player */
 document.getElementById('exp-close').addEventListener('click', closeExpanded);
-document.querySelectorAll('.exp-tab').forEach(tab => {
+document.querySelectorAll('.exp-tab[data-mode]').forEach(tab => {
   tab.addEventListener('click', () => setPlayerMode(tab.dataset.mode));
 });
 // Aplica a preferencia de modo (capa estatica x video) ja no dock
@@ -1334,7 +1336,7 @@ const Gallery = (function () {
     const items = load();
     const key = keyOf(data);
     if (items.some((it) => keyOf(it) === key)) {
-      showToast('Este link ja esta salvo.');
+      showToast('Este link já está salvo.');
       return false;
     }
     items.unshift({
@@ -1345,7 +1347,7 @@ const Gallery = (function () {
     });
     if (items.length > MAX_ITEMS) items.length = MAX_ITEMS;
     persist(items);
-    showToast('Salvo! Veja em "Salvos" na barra lateral.');
+    showToast('Salvo! Veja em "Links Salvos", no Início ou na Biblioteca.');
     return true;
   }
 
@@ -1405,6 +1407,82 @@ const YT_SEARCH_SOURCES = [
   { kind: 'invidious', base: 'https://invidious.nerdvpn.de' },
 ];
 const ytSearchCache = new Map();
+
+// ============================================
+// ADSHIELD — MECANISMO SEM ANUNCIOS E PROMOCOES
+// Camada unica de protecao do app, em tres frentes:
+//   1. FILTRO DE CONTEUDO: todo resultado vindo do YouTube passa por
+//      AdShield.filter() dentro de searchYouTube — o unico ponto de
+//      entrada de conteudo externo. Isso cobre automaticamente a Busca,
+//      os "Videoclipes relacionados", os "Mixes para Você" e as
+//      "Novidades" (recommendations.js reusa searchYouTube).
+//   2. PLAYER PRIVADO: o player usa o dominio oficial youtube-nocookie
+//      (modo de privacidade aprimorada do proprio YouTube): sem cookies
+//      de rastreamento, sem personalizacao de anuncios por historico.
+//      Junto com rel=0, iv_load_policy=3 e modestbranding, tambem
+//      remove cartoes promocionais, anotacoes e sugestoes de fim de video.
+//   3. TRANSPARENCIA: conta o que foi filtrado e mostra no Perfil, com
+//      um controle para ligar/desligar (padrao: ligado).
+// Nao altera a logica de negocio: e um filtro puro sobre listas ja
+// existentes + configuracao de player.
+// ============================================
+const AdShield = (function () {
+  const ENABLED_KEY = 'vibefm_adshield';
+  const STATS_KEY = 'vibefm_adshield_stats';
+
+  function enabled() {
+    try { return localStorage.getItem(ENABLED_KEY) !== 'off'; } catch (_) { return true; }
+  }
+
+  function setEnabled(on) {
+    try { localStorage.setItem(ENABLED_KEY, on ? 'on' : 'off'); } catch (_) {}
+    ytSearchCache.clear(); // resultados em cache foram filtrados com a config antiga
+  }
+
+  function blockedCount() {
+    try { return parseInt(localStorage.getItem(STATS_KEY) || '0', 10) || 0; } catch (_) { return 0; }
+  }
+
+  function addBlocked(n) {
+    if (!n) return;
+    try { localStorage.setItem(STATS_KEY, String(blockedCount() + n)); } catch (_) {}
+  }
+
+  // Marcadores conservadores de conteudo promocional/patrocinado.
+  // Regras focadas para nao gerar falsos positivos em titulos de musica.
+  const PROMO_PATTERNS = [
+    /#(ad|ads|publi|publicidade|patrocinado|sponsored)\b/i,
+    /\b(video|conteudo|conte\u00fado|post)\s+patrocinad[oa]\b/i,
+    /\bpaid\s+promotion\b/i,
+    /\bsponsored\s+(content|video)\b/i,
+    /\bpublicidade\s+paga\b/i,
+    /\bcomercial\s+oficial\b/i,
+    /\bpropaganda\s+(de|da|do)\b/i,
+    /\bcupom\s+de\s+desconto\b/i,
+    /\buse\s+o\s+cupom\b/i,
+    /\blink\s+na\s+bio\b/i,
+  ];
+
+  function isPromo(item) {
+    if (!item) return true;
+    const text = ((item.title || '') + ' ' + (item.author || ''));
+    if (PROMO_PATTERNS.some(rx => rx.test(text))) return true;
+    // "Bumpers": clipes de poucos segundos sao vinhetas/anuncios, nao musica
+    if (typeof item.duration === 'number' && item.duration > 0 && item.duration < 10) return true;
+    return false;
+  }
+
+  // Filtro puro: recebe uma lista de resultados e devolve so o conteudo real
+  function filter(list) {
+    if (!enabled() || !Array.isArray(list)) return list;
+    const clean = list.filter(it => !isPromo(it));
+    addBlocked(list.length - clean.length);
+    return clean;
+  }
+
+  return { enabled, setEnabled, blockedCount, isPromo, filter };
+})();
+
 let ytSearchToken = 0;
 
 async function fetchWithTimeout(url, ms) {
@@ -1457,9 +1535,13 @@ async function searchYouTube(query) {
       const res = await fetchWithTimeout(url, 4500);
       if (!res.ok) continue;
       const data = await res.json();
-      const items = src.kind === 'piped'
+      const raw = src.kind === 'piped'
         ? normalizePiped(data && data.items)
         : normalizeInvidious(data);
+      // Mecanismo sem anuncios: filtra promocoes/patrocinados na origem.
+      // Todos os consumidores (busca, relacionados, mixes, novidades)
+      // recebem apenas conteudo real.
+      const items = AdShield.filter(raw);
       if (items.length) {
         const top = items.slice(0, 12);
         ytSearchCache.set(q, top);
@@ -1479,7 +1561,7 @@ function materializeYtTrack(videoId, title, artist, duration) {
   if (!track) {
     track = {
       id,
-      title: title || 'YouTube Video',
+      title: title || 'Vídeo do YouTube',
       artist: artist || 'YouTube',
       album: 'YouTube',
       cover: 'https://i.ytimg.com/vi/' + videoId + '/mqdefault.jpg',
@@ -1548,12 +1630,12 @@ const UserPlaylists = (function () {
     if (!pl) return false;
     const key = itemKey(item);
     if (pl.items.some(it => itemKey(it) === key)) {
-      showToast('Esta faixa ja esta na playlist.');
+      showToast('Esta faixa já está na playlist.');
       return false;
     }
     pl.items.push(item);
     persist(pls);
-    showToast('Adicionada a "' + pl.name + '"');
+    showToast('Adicionada à playlist "' + pl.name + '"');
     return true;
   }
 
@@ -1604,7 +1686,7 @@ const UserPlaylists = (function () {
         showToast(added ? added + ' playlist(s) importada(s)' : 'Nenhuma playlist nova no arquivo');
         if (onDone) onDone();
       } catch (_) {
-        showToast('Arquivo JSON invalido');
+        showToast('Arquivo JSON inválido');
       }
     };
     reader.readAsText(file);
@@ -1638,7 +1720,7 @@ const Tastes = (function () {
     if (!g) return false;
     const t = load();
     if (t.some(x => x.toLowerCase() === g.toLowerCase())) {
-      showToast('Este genero ja esta nos seus gostos.');
+      showToast('Este gênero já está nos seus gostos.');
       return false;
     }
     t.push(g);
@@ -1683,7 +1765,7 @@ async function loadDynamicPlaylist(genre) {
   return tracks;
 }
 
-// ===== Seletor "Adicionar a playlist" =====
+// ===== Seletor "Adicionar à playlist" =====
 // Curte uma faixa a partir de um item {type, videoId/trackId,...} (usado no seletor)
 function likeItem(item) {
   let track;
@@ -1691,14 +1773,14 @@ function likeItem(item) {
   else track = materializeYtTrack(item.videoId, item.title, item.artist, item.duration);
   if (!track) return;
   if (state.likedTracks.has(track.id)) {
-    showToast('Ja esta em "Curtidas".');
+    showToast('Já está em "Curtidas".');
     return;
   }
   state.likedTracks.add(track.id);
   saveLikedTracks();
   if (typeof Reco !== 'undefined' && Reco.recordLike) Reco.recordLike(track.id, track);
   updatePlayerUI();
-  showToast('Adicionada a "Curtidas"');
+  showToast('Adicionada à playlist "Curtidas"');
 }
 
 function openPlaylistChooser(item) {
@@ -1710,7 +1792,7 @@ function openPlaylistChooser(item) {
   overlay.innerHTML = `
     <div class="pl-chooser-backdrop"></div>
     <div class="pl-chooser-modal">
-      <h3>Adicionar a playlist</h3>
+      <h3>Adicionar à playlist</h3>
       <div class="pl-chooser-list" id="pl-chooser-list"></div>
       <div class="pl-chooser-new">
         <input type="text" id="pl-chooser-input" placeholder="Nova playlist..." maxlength="60">
@@ -1844,7 +1926,7 @@ function createGalleryCard(item, onChange) {
   info.className = 'album-info';
   const titleEl = document.createElement('div');
   titleEl.className = 'album-title';
-  titleEl.textContent = item.title || (isPlaylist ? 'Playlist' : 'Video');
+  titleEl.textContent = item.title || (isPlaylist ? 'Playlist' : 'Vídeo');
   const sub = document.createElement('div');
   sub.className = 'album-artist';
   sub.textContent = isPlaylist ? 'list=' + item.list.slice(0, 18) + (item.list.length > 18 ? '\u2026' : '') : 'youtu.be/' + item.id;
@@ -1872,7 +1954,7 @@ function renderSaved() {
     <div class="section">
       ${backButton()}
       <h2 class="section-title" style="margin-bottom:6px">Links Salvos</h2>
-      <p style="font-size:12px;color:var(--text-muted);margin-bottom:20px">Videos e playlists do YouTube guardados para ouvir quando quiser. Fixe os favoritos para mante-los no topo.</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:20px">Vídeos e playlists do YouTube guardados para ouvir quando quiser. Fixe os favoritos para mantê-los no topo.</p>
       ${items.length ? `<div class="album-grid" id="gallery-grid"></div>` : `
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>
@@ -1987,28 +2069,28 @@ function renderHome() {
     </div>
     <div class="section">
       <div class="section-header pl-home-header">
-        <h2 class="section-title">Feitas para Voce</h2>
+        <h2 class="section-title">Feitas para Você</h2>
         <button class="pl-action-btn" id="btn-edit-tastes" title="Editar seus gostos no Perfil">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke-linecap="round"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke-linejoin="round"/></svg>
           Editar gostos
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Playlists geradas dinamicamente a partir dos seus generos favoritos.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Playlists geradas dinamicamente a partir dos seus gêneros favoritos.</p>
       ${buildCarousel('home-dyn-pl', 'home-dyn-pl-carousel')}
     </div>
     <div class="section" id="reco-mix-section">
       <div class="section-header pl-home-header">
-        <h2 class="section-title">Mixes para Voce</h2>
+        <h2 class="section-title">Mixes para Você</h2>
         <button class="pl-action-btn" id="btn-refresh-reco" title="Gerar novos mixes e novidades">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><polyline points="1 20 1 14 7 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Atualizar
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Mixes diversos a partir das suas curtidas, do que voce ouve e dos seus gostos.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Mixes diversos a partir das suas curtidas, do que você ouve e dos seus gostos.</p>
       <div class="pl-carousel-wrap" id="reco-mix-wrap">
         <button class="pl-carousel-arrow pl-carousel-prev" id="reco-mix-prev" title="Anterior"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="pl-carousel-track" id="reco-mix-carousel"><p style="font-size:12px;color:var(--text-muted)">Gerando seus mixes\u2026</p></div>
-        <button class="pl-carousel-arrow pl-carousel-next" id="reco-mix-next" title="Proximo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="pl-carousel-arrow pl-carousel-next" id="reco-mix-next" title="Próximo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
     </div>
     <div class="section" id="home-saved-section">
@@ -2019,16 +2101,16 @@ function renderHome() {
           Ver todos
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Seus videos e playlists salvos. Fixe os favoritos para mante-los no topo.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Seus vídeos e playlists salvos. Fixe os favoritos para mantê-los no topo.</p>
       <div class="pl-carousel-wrap" id="home-saved-wrap">
         <button class="pl-carousel-arrow pl-carousel-prev" id="home-saved-prev" title="Anterior"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="pl-carousel-track" id="home-saved-carousel"></div>
-        <button class="pl-carousel-arrow pl-carousel-next" id="home-saved-next" title="Proximo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="pl-carousel-arrow pl-carousel-next" id="home-saved-next" title="Próximo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
     </div>
     <div class="section" id="reco-news-section" style="display:none">
-      <h2 class="section-title" style="margin-bottom:6px">Novidades para Voce</h2>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Lancamentos recentes dos artistas e generos que voce curte.</p>
+      <h2 class="section-title" style="margin-bottom:6px">Novidades para Você</h2>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Lançamentos recentes dos artistas e gêneros que você curte.</p>
       <div class="exp-related-row" id="reco-news-row"></div>
     </div>
   `;
@@ -2060,7 +2142,7 @@ function renderHome() {
     const card = createPlaylistCard({
       id: 'dyn_' + genre,
       name: genre,
-      subtitle: 'carregando...',
+      subtitle: 'carregando\u2026',
       tracks: [],
       isUser: false,
       isDynamic: true,
@@ -2073,7 +2155,7 @@ function renderHome() {
       const freshCard = createPlaylistCard({
         id: 'dyn_' + genre,
         name: genre,
-        subtitle: tracks.length ? tracks.length + ' faixas' : 'indisponivel',
+        subtitle: tracks.length ? tracks.length + ' faixas' : 'indisponível',
         tracks: tracks,
         isUser: false,
         isDynamic: true,
@@ -2132,7 +2214,7 @@ function buildCarousel(prefix, trackId) {
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <div class="pl-carousel-track" id="${trackId}"></div>
-      <button class="pl-carousel-arrow pl-carousel-next" id="${prefix}-next" title="Proximo">
+      <button class="pl-carousel-arrow pl-carousel-next" id="${prefix}-next" title="Próximo">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
@@ -2279,7 +2361,7 @@ function togglePlaylistExpand(cfg, clickedCard) {
   header.innerHTML = `
     <div>
       <div class="pl-expand-title">${escapeHtml(cfg.name)}</div>
-      <div class="pl-expand-subtitle">${cfg.tracks.length} faixa(s) \u00B7 ${cfg.isLiked ? 'suas curtidas' : (cfg.isUser ? 'criada por voce' : 'baseada no seu gosto')}</div>
+      <div class="pl-expand-subtitle">${cfg.tracks.length} faixa(s) \u00B7 ${cfg.isLiked ? 'suas curtidas' : (cfg.isUser ? 'criada por você' : 'baseada no seu gosto')}</div>
     </div>
     <button class="pl-expand-close" title="Fechar">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
@@ -2325,11 +2407,11 @@ function togglePlaylistExpand(cfg, clickedCard) {
     }
     body.appendChild(list);
   } else if (cfg.isDynamic) {
-    body.innerHTML = '<p class="pl-acc-empty">Carregando faixas...</p>';
+    body.innerHTML = '<p class="pl-acc-empty">Carregando faixas\u2026</p>';
   } else if (cfg.isLiked) {
-    body.innerHTML = '<p class="pl-acc-empty">Voce ainda nao curtiu musicas. Toque o coracao em uma faixa para adiciona-la aqui.</p>';
+    body.innerHTML = '<p class="pl-acc-empty">Você ainda não curtiu músicas. Toque o coração em uma faixa para adicioná-la aqui.</p>';
   } else {
-    body.innerHTML = '<p class="pl-acc-empty">Playlist vazia. Use o botao + nas faixas ou nos resultados da busca para adicionar.</p>';
+    body.innerHTML = '<p class="pl-acc-empty">Playlist vazia. Use o botão + nas faixas ou nos resultados da busca para adicionar.</p>';
   }
   expandContainer.appendChild(body);
 
@@ -2433,9 +2515,9 @@ function playlistAccordionItem(cfg) {
   } else if (cfg.isDynamic) {
     body.innerHTML = '<p class="pl-acc-empty">Carregando faixas\u2026</p>';
   } else if (cfg.isLiked) {
-    body.innerHTML = '<p class="pl-acc-empty">Voce ainda nao curtiu musicas. Toque o coracao em uma faixa para adiciona-la aqui.</p>';
+    body.innerHTML = '<p class="pl-acc-empty">Você ainda não curtiu músicas. Toque o coração em uma faixa para adicioná-la aqui.</p>';
   } else {
-    body.innerHTML = '<p class="pl-acc-empty">Playlist vazia. Use o botao + nas faixas ou nos resultados da busca para adicionar.</p>';
+    body.innerHTML = '<p class="pl-acc-empty">Playlist vazia. Use o botão + nas faixas ou nos resultados da busca para adicionar.</p>';
   }
 
   header.addEventListener('click', () => {
@@ -2502,7 +2584,7 @@ async function performSearch(raw) {
       const playlistId = extractPlaylistId(raw);
 
       if (!videoId && !playlistId) {
-        resultsEl.innerHTML = `<div class="empty-state"><p>URL do YouTube nao reconhecida</p></div>`;
+        resultsEl.innerHTML = `<div class="empty-state"><p>URL do YouTube não reconhecida</p></div>`;
         return;
       }
 
@@ -2514,7 +2596,7 @@ async function performSearch(raw) {
         <div class="url-result-card">
           <img src="${thumbUrl}" alt="Preview" class="url-result-thumb" id="url-preview-img" onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 9%22%3E%3Crect width=%2216%22 height=%229%22 fill=%22%23111%22/%3E%3Cpath d=%22M6.5 2.5v3.2a1.3 1.3 0 101 1.26V4h2v-1z%22 fill=%22%230AE448%22/%3E%3C/svg%3E'">
           <div class="url-result-info">
-            <div class="url-result-label">${videoId ? 'Video' : 'Playlist'}</div>
+            <div class="url-result-label">${videoId ? 'Vídeo' : 'Playlist'}</div>
             <div class="url-result-id">ID: ${videoId || playlistId}</div>
             <div class="url-result-meta" id="url-meta"></div>
             <div class="url-result-actions">
@@ -2569,7 +2651,7 @@ async function performSearch(raw) {
         <h3 class="section-title" style="margin-bottom:12px">Resultados</h3>
         <div id="yt-search-results"><p class="yt-search-status">Buscando\u2026</p></div>
       </div>
-      ${known.length ? `<h3 class="section-title" style="margin:24px 0 12px">Ja tocadas nesta sessao</h3><div class="track-list">${known.map((t, i) => trackRow(t, i + 1, known)).join('')}</div>` : ''}
+      ${known.length ? `<h3 class="section-title" style="margin:24px 0 12px">Já tocadas nesta sessão</h3><div class="track-list">${known.map((t, i) => trackRow(t, i + 1, known)).join('')}</div>` : ''}
     `;
     attachTrackListeners();
 
@@ -2630,7 +2712,7 @@ function renderYtSearchResults(container, results) {
 
     const addBtn = document.createElement('button');
     addBtn.className = 'row-action-btn';
-    addBtn.title = 'Adicionar a playlist';
+    addBtn.title = 'Adicionar à playlist';
     addBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>';
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2715,7 +2797,7 @@ function renderLibrary() {
       playlistAccordionItem({
         id: pl.id,
         name: pl.name,
-        subtitle: pl.items.length + ' faixas \u00B7 criada por voce',
+        subtitle: pl.items.length + ' faixas \u00B7 criada por você',
         tracks: UserPlaylists.tracksOf(pl),
         isUser: true,
         cover: null,
@@ -2724,7 +2806,7 @@ function renderLibrary() {
   } else {
     const note = document.createElement('p');
     note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:12px';
-    note.textContent = 'Nenhuma playlist criada ainda. Va para Inicio e clique em "Nova".';
+    note.textContent = 'Nenhuma playlist criada ainda. Vá para o Início e clique em "Nova".';
     acc.appendChild(note);
   }
   attachTrackListeners();
@@ -2734,7 +2816,7 @@ function renderProfile() {
   const uniqueTracks = new Set(state.history.map(h => h.trackId));
   const totalTime = state.history.length * 240;
   const tastes = Tastes.load();
-  const suggestions = ['Indie', 'Synthwave', 'Rock', 'Pop', 'Musica Brasileira', 'Jazz', 'Lo-Fi', 'Eletronica', 'Hip Hop', 'MPB', 'Sertanejo', 'Classica', 'Metal', 'Reggae', 'Funk']
+  const suggestions = ['Indie', 'Synthwave', 'Rock', 'Pop', 'Música Brasileira', 'Jazz', 'Lo-Fi', 'Eletrônica', 'Hip Hop', 'MPB', 'Sertanejo', 'Clássica', 'Metal', 'Reggae', 'Funk']
     .filter(s => !tastes.some(t => t.toLowerCase() === s.toLowerCase()));
 
   main.innerHTML = `
@@ -2744,7 +2826,7 @@ function renderProfile() {
         <div>
           <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px">Perfil</div>
           <div class="profile-name">Ouvinte</div>
-          <p class="profile-bio">Suas playlists dinamicas sao geradas a partir dos gostos abaixo.</p>
+          <p class="profile-bio">Suas playlists dinâmicas são geradas a partir dos gostos abaixo.</p>
           <div class="profile-stats-row">
             <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg> ${state.likedTracks.size} curtidas</span>
             <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/></svg> ${uniqueTracks.size} ouvidas</span>
@@ -2756,17 +2838,32 @@ function renderProfile() {
 
     <div class="section" style="padding-top:0">
       <h3 class="section-title" style="margin-bottom:6px">Seus Gostos</h3>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Cada genero vira uma playlist dinamica na Home. Adicione, remova ou crie os seus.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Cada gênero vira uma playlist dinâmica no Início. Adicione, remova ou crie os seus.</p>
       <div class="taste-chips" id="taste-chips"></div>
       <div class="taste-add">
-        <input type="text" id="taste-input" placeholder="Adicionar genero (ex: bossa nova)" maxlength="40">
+        <input type="text" id="taste-input" placeholder="Adicionar gênero (ex.: bossa nova)" maxlength="40">
         <button id="taste-add-btn">Adicionar</button>
       </div>
       ${suggestions.length ? `
         <div style="margin-top:14px">
-          <div style="font-size:10.5px;color:var(--text-muted);margin-bottom:8px">Sugestoes:</div>
+          <div style="font-size:10.5px;color:var(--text-muted);margin-bottom:8px">Sugestões:</div>
           <div class="taste-chips taste-suggestions" id="taste-suggestions"></div>
         </div>` : ''}
+    </div>
+
+    <div class="section" style="padding-top:0">
+      <h3 class="section-title" style="margin-bottom:6px">Sem Anúncios e Promoções</h3>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Proteção do MinStream: filtra conteúdo patrocinado das buscas e recomendações e usa o player em modo de privacidade (sem anúncios personalizados).</p>
+      <div class="adshield-card" id="adshield-card">
+        <div class="adshield-icon ${AdShield.enabled() ? 'on' : ''}">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-linejoin="round"/>${AdShield.enabled() ? '<polyline points="9 12 11 14 15 10" stroke-linecap="round" stroke-linejoin="round"/>' : ''}</svg>
+        </div>
+        <div class="adshield-info">
+          <div class="adshield-status">${AdShield.enabled() ? 'Proteção ativa' : 'Proteção desativada'}</div>
+          <div class="adshield-sub">${AdShield.blockedCount()} promoção(ões) filtrada(s) até agora</div>
+        </div>
+        <button class="pl-action-btn" id="adshield-toggle">${AdShield.enabled() ? 'Desativar' : 'Ativar'}</button>
+      </div>
     </div>
 
     <div class="stats-grid">
@@ -2778,6 +2875,16 @@ function renderProfile() {
   `;
 
   const chipsEl = document.getElementById('taste-chips');
+
+  // Toggle do mecanismo sem anuncios
+  const shieldBtn = document.getElementById('adshield-toggle');
+  if (shieldBtn) shieldBtn.addEventListener('click', () => {
+    const next = !AdShield.enabled();
+    AdShield.setEnabled(next);
+    renderProfile();
+    showToast(next ? 'Proteção contra anúncios ativada' : 'Proteção contra anúncios desativada');
+  });
+
   tastes.forEach(genre => {
     const chip = document.createElement('span');
     chip.className = 'taste-chip';
@@ -2823,19 +2930,19 @@ function renderLiked() {
   main.innerHTML = `
     <div class="section">
       ${backButton()}
-      <h2 class="section-title" style="margin-bottom:20px">Musicas Curtidas</h2>
-      ${tracks.length ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg><p>Nenhuma musica curtida ainda</p></div>`}
+      <h2 class="section-title" style="margin-bottom:20px">Músicas Curtidas</h2>
+      ${tracks.length ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg><p>Nenhuma música curtida ainda</p></div>`}
     </div>
   `;
   attachTrackListeners();
 }
 
 function clearRecent() {
-  if (!confirm('Limpar todo o historico de musicas tocadas?')) return;
+  if (!confirm('Limpar todo o histórico de músicas tocadas?')) return;
   state.history = [];
   saveHistory();
   renderRecent();
-  showToast('Historico limpo');
+  showToast('Histórico limpo');
 }
 
 function renderRecent() {
@@ -2845,12 +2952,12 @@ function renderRecent() {
       ${backButton()}
       <div class="section-header">
         <h2 class="section-title">Tocados Recentemente</h2>
-        ${state.history.length ? `<button class="pl-action-btn" id="btn-clear-recent" title="Limpar historico">
+        ${state.history.length ? `<button class="pl-action-btn" id="btn-clear-recent" title="Limpar histórico">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" stroke-linecap="round"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" stroke-linecap="round"/></svg>
           Limpar
         </button>` : ''}
       </div>
-      ${tracks.length ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg><p>Nenhuma musica tocada ainda. Comece a ouvir!</p></div>`}
+      ${tracks.length ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg><p>Nenhuma música tocada ainda. Comece a ouvir!</p></div>`}
     </div>
   `;
   const clearBtn = document.getElementById('btn-clear-recent');
@@ -2876,7 +2983,7 @@ function trackRow(track, num, tracks) {
         <div class="track-artist">${escapeHtml(track.artist)}</div>
       </div>
       ${track.bpm ? `<div class="track-bpm">${track.bpm} BPM</div>` : ''}
-      <button class="row-action-btn track-add-btn" data-add-track="${track.id}" title="Adicionar a playlist">
+      <button class="row-action-btn track-add-btn" data-add-track="${track.id}" title="Adicionar à playlist">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>
       </button>
       <div class="track-duration">${fmtTime(track.duration)}</div>
@@ -2998,6 +3105,9 @@ const progressFill = document.getElementById('progress-fill');
 const progressHandle = document.getElementById('progress-handle');
 const timeCurrent = document.getElementById('time-current');
 const timeTotal = document.getElementById('time-total');
+// Verdadeiro enquanto o usuario arrasta a bolinha do progresso:
+// pausa a atualizacao automatica da barra para nao brigar com o dedo
+let isScrubbing = false;
 const btnMute = document.getElementById('btn-mute');
 const iconVol = document.getElementById('icon-vol');
 const iconMute = document.getElementById('icon-mute');
@@ -3017,12 +3127,14 @@ function updatePlayerUI() {
   iconPlay.style.display = state.isPlaying ? 'none' : '';
   iconPause.style.display = state.isPlaying ? '' : 'none';
 
-  const prog = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0;
-  progressFill.style.width = prog + '%';
-  progressHandle.style.left = prog + '%';
+  if (!isScrubbing) {
+    const prog = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0;
+    progressFill.style.width = prog + '%';
+    progressHandle.style.left = prog + '%';
 
-  timeCurrent.textContent = fmtTime(state.currentTime);
-  timeTotal.textContent = '-' + fmtTime(Math.max(0, state.duration - state.currentTime));
+    timeCurrent.textContent = fmtTime(state.currentTime);
+    timeTotal.textContent = '-' + fmtTime(Math.max(0, state.duration - state.currentTime));
+  }
 
   btnLike.classList.toggle('liked', state.likedTracks.has(t.id));
   btnShuffle.classList.toggle('active', state.isShuffled);
@@ -3078,6 +3190,93 @@ document.getElementById('progress-container').addEventListener('click', (e) => {
   seekToTime(ratio * state.duration);
 });
 
+// ===== Scrub preciso pela bolinha (toque e mouse) =====
+// Arrastar move a bolinha com preview ao vivo do tempo; ao soltar, busca a
+// posicao exata. Reusa seekToTime — nenhuma logica de reproducao nova.
+(function initPrecisionScrub() {
+  const container = document.getElementById('progress-container');
+
+  function ratioFromEvent(e) {
+    const rect = container.getBoundingClientRect();
+    if (!rect.width) return 0;
+    return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  }
+
+  function preview(ratio) {
+    const prog = ratio * 100;
+    progressFill.style.width = prog + '%';
+    progressHandle.style.left = prog + '%';
+    if (state.duration > 0) {
+      const t = ratio * state.duration;
+      timeCurrent.textContent = fmtTime(t);
+      timeTotal.textContent = '-' + fmtTime(Math.max(0, state.duration - t));
+    }
+  }
+
+  container.addEventListener('pointerdown', (e) => {
+    if (!state.duration) return;
+    isScrubbing = true;
+    try { container.setPointerCapture(e.pointerId); } catch (_) {}
+    preview(ratioFromEvent(e));
+  });
+
+  container.addEventListener('pointermove', (e) => {
+    if (!isScrubbing) return;
+    e.preventDefault();
+    preview(ratioFromEvent(e));
+  });
+
+  function finish(e) {
+    if (!isScrubbing) return;
+    isScrubbing = false;
+    seekToTime(ratioFromEvent(e) * state.duration);
+  }
+  container.addEventListener('pointerup', finish);
+  container.addEventListener('pointercancel', () => { isScrubbing = false; updatePlayerUI(); });
+})();
+
+// ===== MODO TV: video em reproducao em tela cheia =====
+// Usa a Fullscreen API sobre o container do video; onde a API nao existe
+// (iPhones antigos), a classe body.tv-mode aplica um fallback CSS que ocupa
+// a tela inteira. Nao altera a reproducao — apenas apresenta o video.
+function isTvMode() { return document.body.classList.contains('tv-mode'); }
+
+function enterTvMode() {
+  if (!state.currentTrack) { showToast('Toque uma música para usar o Modo TV'); return; }
+  document.body.classList.add('tv-mode');
+  const req = videoCover.requestFullscreen || videoCover.webkitRequestFullscreen;
+  if (req) {
+    try {
+      const p = req.call(videoCover);
+      if (p && p.catch) p.catch(() => {}); // fallback CSS ja cobre a tela
+    } catch (_) {}
+  }
+}
+
+function exitTvMode() {
+  document.body.classList.remove('tv-mode');
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl) {
+    const ex = document.exitFullscreen || document.webkitExitFullscreen;
+    try {
+      const p = ex.call(document);
+      if (p && p.catch) p.catch(() => {});
+    } catch (_) {}
+  }
+}
+
+function toggleTvMode() { isTvMode() ? exitTvMode() : enterTvMode(); }
+
+document.getElementById('exp-tab-tv').addEventListener('click', toggleTvMode);
+document.getElementById('tv-exit').addEventListener('click', (e) => { e.stopPropagation(); exitTvMode(); });
+// Saida nativa (Esc / gesto do sistema) tambem limpa o Modo TV
+function onFsChange() {
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!fsEl && isTvMode()) document.body.classList.remove('tv-mode');
+}
+document.addEventListener('fullscreenchange', onFsChange);
+document.addEventListener('webkitfullscreenchange', onFsChange);
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
@@ -3091,6 +3290,7 @@ document.addEventListener('keydown', (e) => {
     case 'r': case 'R': cycleRepeat(); break;
     case 'l': case 'L': if (state.currentTrack) toggleLike(state.currentTrack.id); break;
     case 't': case 'T': toggleExpanded(); break;
+    case 'f': case 'F': toggleTvMode(); break;
     case 'q': case 'Q': toggleQueuePanel(); break;
     case '?':
       e.preventDefault();
@@ -3485,6 +3685,7 @@ initSidebar();
   if (cover) {
     cover.addEventListener('click', (e) => {
       if (!mqMobile.matches) return;
+      if (isTvMode()) return;                 // no Modo TV o video fica livre
       if (isExpanded) return;                 // no palco, nao intercepta
       if (e.target.closest('button')) return;
       if (!state.currentTrack) return;

@@ -350,7 +350,7 @@ const Reco = (function () {
     if (!carousel) return;
     const defs = [
       { kind: 'mix', name: 'Mix do dia', subtitle: 'baseado no seu gosto' },
-      { kind: 'discover', name: 'Descobrir', subtitle: 'artistas novos para voce' },
+      { kind: 'discover', name: 'Descobrir', subtitle: 'artistas novos para você' },
     ];
     carousel.replaceChildren();
     for (const d of defs) {

@@ -500,9 +500,10 @@ body.theater-open #theater-backdrop {
   margin: 0;
 }
 
-/* Padding maior do Inicio em relacao a barra superior */
+/* Distancia maior entre o icone de Inicio e as bordas do container:
+   padding proprio, declarado por ultimo para vencer a regra compartilhada */
 .nav-main {
-  padding: 20px 10px 0;
+  padding: 28px 14px 0;
 }
 
 .tb-brand {
@@ -537,8 +538,12 @@ body.theater-open #theater-backdrop {
 }
 
 /* Navigation */
-.nav-main, .nav-playlists {
+.nav-playlists {
   padding: 0 10px;
+}
+
+.nav-main {
+  padding: 28px 14px 0;
 }
 
 .nav-btn {
@@ -3018,6 +3023,83 @@ body, button, input {
 }
 
 /* ============================================================
+   MODO TV — video em reproducao em tela cheia
+   Funciona com a Fullscreen API e tambem como fallback CSS puro
+   (por isso o !important: vence os estilos inline do modo theater).
+   ============================================================ */
+body.tv-mode #video-cover {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  z-index: 2000 !important;
+  background: #000;
+}
+/* No Modo TV o VIDEO e o protagonista: esconde a capa estatica */
+body.tv-mode #player-cover { visibility: hidden; }
+
+/* Elemento em fullscreen nativo: mesmo tratamento */
+#video-cover:fullscreen { border-radius: 0; border: none; background: #000; }
+
+/* Botao de sair do Modo TV */
+#tv-exit {
+  display: none;
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  right: 14px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  opacity: 0.85;
+  transition: opacity 0.2s ease, transform 0.15s ease;
+}
+#tv-exit:active { transform: scale(0.9); }
+body.tv-mode #tv-exit { display: flex; }
+
+/* ===== AdShield: cartao "Sem Anuncios e Promocoes" (Perfil) ===== */
+.adshield-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+.adshield-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.adshield-icon.on {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.adshield-info { flex: 1; min-width: 0; }
+.adshield-status { font-size: 14px; font-weight: 600; color: var(--text); }
+.adshield-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+/* ============================================================
    VERSAO MOBILE (estilo iOS)
    Camada final da cascata: so afeta telas <= 768px.
    Nenhuma logica muda - apenas UI/UX.
@@ -3193,7 +3275,8 @@ body, button, input {
   .ctrl-play svg { width: 28px; height: 28px; }
   .player-right { display: none; } /* volume pelos botoes do aparelho */
 
-  /* Progresso: linha fina no topo do cartao */
+  /* Progresso do mini player: linha fina no topo do cartao (sem bolinha
+     nem contador — o scrub preciso fica no player expandido) */
   .progress-row {
     position: absolute;
     top: 0; left: 0; right: 0;
@@ -3208,8 +3291,8 @@ body, button, input {
   body.theater-open #mobile-tabbar { display: none; }
   body.theater-open #player-dock {
     left: 0; right: 0; bottom: 0;
-    height: calc(var(--dock-h) + var(--safe-bottom) + 14px);
-    min-height: calc(var(--dock-h) + var(--safe-bottom) + 14px);
+    height: calc(var(--dock-h) + var(--safe-bottom) + 34px);
+    min-height: calc(var(--dock-h) + var(--safe-bottom) + 34px);
     padding-bottom: var(--safe-bottom);
     border-radius: 0;
     border-left: none; border-right: none; border-bottom: none;
@@ -3224,12 +3307,55 @@ body, button, input {
   body.theater-open #btn-queue { display: flex; }
   body.theater-open .ctrl-btn { width: 38px; height: 38px; }
   body.theater-open .player-info { display: none; } /* info ja aparece no palco */
-  body.theater-open .player-center { flex: 1; justify-content: center; }
+  body.theater-open .player-center {
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+  }
   body.theater-open .ctrl-row { gap: 6px; justify-content: center; width: 100%; }
+  /* Player expandido: scrub preciso com bolinha + contador de tempo */
+  body.theater-open .progress-row {
+    position: static;
+    width: 100%;
+    height: 24px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  body.theater-open .time-label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  body.theater-open .progress-container {
+    flex: 1;
+    height: 20px;              /* alvo de toque generoso */
+    background: transparent;
+    display: flex;
+    align-items: center;
+    touch-action: none;        /* arrastar nao rola a pagina */
+  }
+  body.theater-open .progress-bar {
+    height: 4.5px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.18);
+  }
+  body.theater-open .progress-fill { border-radius: 999px; }
+  body.theater-open .progress-handle {
+    display: block;
+    opacity: 1;                /* bolinha sempre visivel */
+    width: 13px;
+    height: 13px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
   /* No modo expandido o video e posicionado por JS sobre o palco;
      quando em modo capa/fila, o mini video fica em cima da barra */
   body.theater-open #video-cover:not(.theater) {
-    bottom: calc(var(--dock-h) + var(--safe-bottom) + 22px);
+    bottom: calc(var(--dock-h) + var(--safe-bottom) + 42px);
   }
 
   /* Player expandido em tela cheia (folha iOS) */
@@ -3254,7 +3380,7 @@ body, button, input {
   }
   .exp-tab {
     border-radius: 7px;
-    padding: 7px 14px;
+    padding: 7px 10px;
     font-size: 12px;
   }
   .exp-tab.active {
