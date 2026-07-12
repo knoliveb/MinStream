@@ -1082,7 +1082,8 @@ body.theater-open #theater-backdrop {
 .genre-card {
   height: 120px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--surface-2), var(--surface));
+  /* Degradê cinza-escuro -> verde ("Explorar seus Gostos") */
+  background: linear-gradient(135deg, #2b2b2b 0%, #123c22 55%, var(--green) 135%);
   display: flex;
   align-items: flex-end;
   padding: 16px;
@@ -1937,6 +1938,47 @@ a:focus {
   height: 36px !important;
   border-radius: 5px;
   object-fit: cover;
+}
+
+/* ===== Cards de busca com degradê cinza escuro + verde ===== */
+.yt-result-row {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-2) 50%, rgba(10, 228, 72, 0.06) 100%);
+  border-left: 3px solid transparent;
+  transition: all 0.25s ease;
+}
+
+.yt-result-row:hover {
+  background: linear-gradient(90deg, rgba(34, 34, 34, 0.95) 0%, rgba(34, 34, 34, 0.85) 50%, rgba(10, 228, 72, 0.18) 100%);
+  border-left-color: var(--green);
+}
+
+.yt-result-row.active {
+  background: linear-gradient(90deg, rgba(10, 228, 72, 0.12) 0%, rgba(10, 228, 72, 0.08) 60%, rgba(10, 228, 72, 0.2) 100%);
+  border-left-color: var(--green);
+}
+
+
+/* ===== Cards ocultos da Home (seção Links Salvos) ===== */
+#gallery-hidden-grid .gallery-card {
+  opacity: 0.85;
+  filter: grayscale(0.3);
+  transition: all 0.25s ease;
+}
+
+#gallery-hidden-grid .gallery-card:hover {
+  opacity: 1;
+  filter: grayscale(0);
+}
+
+#gallery-hidden-grid .gallery-del {
+  display: flex;
+  background: var(--green);
+  color: #000;
+}
+
+#gallery-hidden-grid .gallery-del:hover {
+  background: #0bc43f;
+  transform: scale(1.1);
 }
 
 /* ===== Modal: adicionar a playlist ===== */
@@ -3362,10 +3404,15 @@ body.tv-mode #tv-exit { display: flex; }
   #expanded-player {
     top: 0;
     left: 0; right: 0;
-    bottom: calc(var(--dock-h) + var(--safe-bottom) + 14px);
+    /* Reserva exatamente a altura do dock em modo theater
+       (dock-h + safe-bottom + 34px) para nenhum conteudo ficar
+       cortado/encoberto pelos controles do player */
+    bottom: calc(var(--dock-h) + var(--safe-bottom) + 34px);
     border-radius: 0;
-    padding: calc(var(--safe-top) + 14px) 14px 20px;
+    padding: calc(var(--safe-top) + 14px) 14px 24px;
   }
+  /* Respiro extra no fim do conteudo rolavel do player expandido */
+  .exp-related { padding-bottom: 10px; }
   .exp-topbar { flex-wrap: wrap; gap: 8px; }
   .exp-context { font-size: 14px; width: 100%; order: -1; }
 
@@ -3483,4 +3530,143 @@ body.tv-mode #tv-exit { display: flex; }
 /* Telas bem pequenas: esconde o rotulo das abas como apps iOS compactos */
 @media (max-width: 340px) {
   #mobile-tabbar .tab-label { display: none; }
+}
+
+/* ============================================
+   MELHORIAS: drag and drop + menu "..." (mobile)
+   ============================================ */
+
+/* Alça de arrastar (playlists do usuário) */
+.drag-handle {
+  cursor: grab;
+  touch-action: none; /* impede o scroll de capturar o gesto no toque */
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.drag-handle:active { cursor: grabbing; }
+.track-row.dragging {
+  opacity: 0.85;
+  background: rgba(255,255,255,0.07);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  position: relative;
+  z-index: 5;
+}
+
+/* Botão "..." por faixa: oculto no desktop, visível no mobile */
+.track-menu-btn { display: none; }
+
+/* Bottom sheet do menu de faixa */
+#track-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+}
+.track-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+}
+.track-menu-sheet {
+  position: relative;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: track-menu-up 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+@keyframes track-menu-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+.track-menu-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 8px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.track-menu-title:empty { display: none; }
+.track-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 10px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.track-menu-item svg { color: var(--green); flex-shrink: 0; }
+.track-menu-item:active { background: rgba(255,255,255,0.08); }
+
+/* Mobile: ações "adicionar"/"salvar" migram para o menu "..." e a
+   numeração da lista é ocultada */
+@media (max-width: 768px) {
+  .track-num { display: none; }
+  .track-add-btn,
+  .yt-add-btn,
+  .yt-save-btn { display: none; }
+  .track-menu-btn { display: flex; }
+}
+
+/* No desktop, o sheet vira um modal centralizado (caso o menu seja aberto) */
+@media (min-width: 769px) {
+  #track-menu { align-items: center; justify-content: center; }
+  .track-menu-sheet {
+    width: 360px;
+    border-radius: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* ============================================
+   MELHORIAS: reordenacao da fila por drag and drop
+   ============================================ */
+.queue-drag-handle {
+  margin-left: auto;         /* encosta na borda direita do item */
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;        /* o gesto arrasta o item, nao rola a lista */
+  opacity: 0.55;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.queue-item:hover .queue-drag-handle { opacity: 1; }
+.queue-drag-handle:hover { color: var(--text); }
+.queue-drag-handle:active { cursor: grabbing; }
+.queue-item.dragging {
+  opacity: 0.85;
+  background: rgba(255,255,255,0.08);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  position: relative;
+  z-index: 5;
+}
+
+@media (max-width: 768px) {
+  /* Alvo de toque maior e alca sempre visivel no mobile */
+  .queue-drag-handle { width: 40px; height: 40px; opacity: 0.8; }
 }

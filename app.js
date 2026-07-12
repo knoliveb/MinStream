@@ -341,6 +341,8 @@ window.onYouTubeIframeAPIReady = function() {
     controls: 0,          // controles nativos ocultos — controle via player customizado
     disablekb: 1,         // desabilita atalhos de teclado do YouTube
     modestbranding: 1,    // minimiza logo do YouTube
+    cc_load_policy: 0,    // nao forca legendas; o desligamento efetivo (inclusive
+                          // das automaticas) acontece em disableCaptions()
     fs: 0,
   };
 
@@ -394,12 +396,23 @@ function showFileProtocolNotice() {
   document.getElementById('file-notice-close').addEventListener('click', () => notice.remove());
 }
 
+// Remove a legenda (inclusive a automatica) de todos os videos.
+// O modulo de legendas e recarregado pelo YouTube a cada novo video,
+// entao esta funcao e chamada no onReady E a cada inicio de reproducao.
+// 'captions' e o modulo do player HTML5; 'cc' e o nome legado.
+function disableCaptions() {
+  if (!ytPlayer || !state.apiReady) return;
+  try { ytPlayer.unloadModule('captions'); } catch (_) {}
+  try { ytPlayer.unloadModule('cc'); } catch (_) {}
+}
+
 function onPlayerReady() {
   clearPlayerError();
   if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
   state.apiReady = true;
   ytPlayer.setVolume(state.volume);
   if (state.isMuted) ytPlayer.mute();
+  disableCaptions();
   if (pendingTrack) {
     doLoad(pendingTrack);
     pendingTrack = null;
@@ -429,6 +442,8 @@ function onPlayerStateChange(event) {
     clearPlayerError();
     if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
     if (event.data === 1) {
+      // Cada video recarrega o modulo de legendas: desliga de novo
+      disableCaptions();
       state.isPlaying = true;
       updatePlayerUI();
       startPoll();
@@ -776,6 +791,7 @@ function buildExpandedQueue(force) {
     frag.appendChild(p);
   }
   ul.replaceChildren(frag);
+  if (!isYt) enableQueueDrag(ul);
   const active = ul.querySelector('.queue-item.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
 }
@@ -1113,8 +1129,51 @@ function renderLocalQueue() {
     frag.appendChild(li);
   });
   queueItemsEl.replaceChildren(frag);
+  enableQueueDrag(queueItemsEl);
   const active = queueItemsEl.querySelector('.queue-item.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+// ============================================
+// REORDENACAO DA FILA (drag and drop)
+// Move uma faixa dentro de state.queue e ajusta o indice atual para
+// que a faixa em reproducao continue a mesma — a ordem de reproducao
+// (proxima/anterior) passa a seguir a nova disposicao.
+// A fila de playlists do YouTube (ytQueue) e controlada pelo proprio
+// player embutido e nao pode ser reordenada pela IFrame API.
+// ============================================
+function reorderLocalQueue(fromIndex, toIndex) {
+  if (fromIndex === toIndex) return;
+  if (fromIndex < 0 || fromIndex >= state.queue.length) return;
+  const [moved] = state.queue.splice(fromIndex, 1);
+  state.queue.splice(toIndex, 0, moved);
+
+  // Mantem o ponteiro na mesma faixa em reproducao
+  if (state.queueIndex === fromIndex) state.queueIndex = toIndex;
+  else if (fromIndex < state.queueIndex && toIndex >= state.queueIndex) state.queueIndex--;
+  else if (fromIndex > state.queueIndex && toIndex <= state.queueIndex) state.queueIndex++;
+
+  // Invalida os caches e re-renderiza as duas visoes da fila
+  localQueueKey = '';
+  expQueueKey = '';
+  if (!queuePanel.classList.contains('hidden')) renderLocalQueue();
+  if (typeof isExpanded !== 'undefined' && isExpanded) buildExpandedQueue(true);
+}
+
+// Adiciona alcas de arrastar aos itens de uma lista de fila local.
+function enableQueueDrag(list) {
+  if (state.currentPlaylist) return; // fila do YT: ordem gerida pelo player
+  Array.from(list.children).forEach(li => {
+    if (!li.classList.contains('queue-item')) return;
+    if (li.querySelector('.queue-drag-handle')) return;
+    const handle = document.createElement('button');
+    handle.className = 'queue-drag-handle';
+    handle.title = 'Arrastar para reordenar';
+    handle.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+    handle.addEventListener('click', (e) => e.stopPropagation());
+    handle.addEventListener('pointerdown', (e) => startRowDrag(e, li, list, reorderLocalQueue));
+    li.appendChild(handle);
+  });
 }
 
 function refreshQueuePanel() {
@@ -1145,6 +1204,9 @@ document.getElementById('btn-queue').addEventListener('click', toggleQueuePanel)
 // ============================================
 function loadTrack(track) {
   if (!track) return;
+  // Acuracia local: conta a reproducao (nao conta a restauracao de
+  // sessao, que carrega pausada com isPlaying = false)
+  if (state.isPlaying && typeof PlayStats !== 'undefined') PlayStats.record(track);
   doLoad(track);
 }
 
@@ -1198,11 +1260,36 @@ function nextTrack() {
     state.currentTime = 0;
     state.isPlaying = true;
     loadTrack(state.currentTrack);
+  } else if (typeof Reco !== 'undefined' && Reco.extendQueue && !radioExtending) {
+    // RADIO CONTINUO: a fila acabou e o repeat esta desligado.
+    // Em vez de parar, estende a fila com sugestoes parecidas
+    // (perfil + faixa atual) e segue tocando.
+    radioExtending = true;
+    Reco.extendQueue(10).then(added => {
+      radioExtending = false;
+      if (added > 0 && state.queueIndex + 1 < state.queue.length) {
+        state.queueIndex++;
+        state.currentTrack = state.queue[state.queueIndex];
+        state.currentTime = 0;
+        state.isPlaying = true;
+        loadTrack(state.currentTrack);
+        updatePlayerUI();
+        refreshQueuePanel();
+        showToast('Rádio: continuando com faixas parecidas');
+      } else {
+        state.isPlaying = false;
+        updatePlayerUI();
+      }
+    }).catch(() => { radioExtending = false; state.isPlaying = false; updatePlayerUI(); });
+    return;
   } else {
     state.isPlaying = false;
   }
   updatePlayerUI();
 }
+
+// Trava contra chamadas simultaneas do radio continuo
+let radioExtending = false;
 
 function prevTrack() {
   if (!state.currentTrack) return;
@@ -1391,7 +1478,36 @@ const Gallery = (function () {
     return top.concat(rest);
   }
 
-  return { load, save, remove, keyOf, watchUrlOf, updateTitle, isPinned, togglePin, loadSorted };
+
+  // ----- Ocultar da Home (secao "Links Salvos" do Inicio) -----
+  const HOME_HIDDEN_KEY = 'vibefm_gallery_home_hidden';
+  function loadHomeHidden() {
+    try {
+      const raw = localStorage.getItem(HOME_HIDDEN_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) { return new Set(); }
+  }
+  function persistHomeHidden(set) {
+    try { localStorage.setItem(HOME_HIDDEN_KEY, JSON.stringify([...set])); } catch (_) {}
+  }
+  function isHiddenFromHome(key) { return loadHomeHidden().has(key); }
+  function hideFromHome(key) {
+    const set = loadHomeHidden();
+    set.add(key);
+    persistHomeHidden(set);
+  }
+  function unhideFromHome(key) {
+    const set = loadHomeHidden();
+    set.delete(key);
+    persistHomeHidden(set);
+  }
+  function loadSortedForHome() {
+    const hidden = loadHomeHidden();
+    return loadSorted().filter((it) => !hidden.has(keyOf(it)));
+  }
+
+  return { load, save, remove, keyOf, watchUrlOf, updateTitle, isPinned, togglePin, loadSorted, hideFromHome, unhideFromHome, isHiddenFromHome, loadHomeHidden, loadSortedForHome };
 })();
 
 // ============================================
@@ -1503,6 +1619,7 @@ function normalizePiped(items) {
       title: it.title || '',
       author: it.uploaderName || '',
       duration: it.duration || 0,
+      views: (typeof it.views === 'number' && it.views >= 0) ? it.views : 0,
       published: (typeof it.uploaded === 'number' && it.uploaded > 0) ? it.uploaded : null,
       publishedText: it.uploadedDate || it.uploadedText || '',
     }))
@@ -1517,10 +1634,39 @@ function normalizeInvidious(items) {
       title: it.title || '',
       author: it.author || '',
       duration: it.lengthSeconds || 0,
+      views: (typeof it.viewCount === 'number' && it.viewCount >= 0) ? it.viewCount : 0,
       published: (typeof it.published === 'number' && it.published > 0) ? it.published * 1000 : null,
       publishedText: it.publishedText || '',
     }))
     .filter(it => isValidId(it.videoId));
+}
+
+// ============================================
+// ACURACIA POR QUANTIDADE DE REPRODUCAO
+// Ranqueia qualquer lista de resultados do YouTube pela contagem de
+// reproducoes (views): o conteudo mais reproduzido e considerado mais
+// relevante e sobe; o menos reproduzido desce. Ordenacao estavel:
+// empates preservam a ordem original da busca.
+// Aplicado dentro de searchYouTube, o unico ponto de entrada de
+// conteudo externo — cobre a Busca, as playlists dinamicas
+// ("Feitas para Você"), os relacionados, os mixes e as novidades.
+// ============================================
+function rankByPlays(items) {
+  if (!Array.isArray(items)) return items;
+  return items
+    .map((it, i) => ({ it, i }))
+    .sort((a, b) => ((b.it.views || 0) - (a.it.views || 0)) || (a.i - b.i))
+    .map(x => x.it);
+}
+
+// Formata contagem de reproducoes de forma compacta (pt-BR): 1,2 mi, 340 mil...
+function fmtViews(v) {
+  if (!v || v <= 0) return '';
+  try {
+    return new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 }).format(v) + ' reproduções';
+  } catch (_) {
+    return String(v) + ' reproduções';
+  }
 }
 
 async function searchYouTube(query) {
@@ -1543,7 +1689,8 @@ async function searchYouTube(query) {
       // recebem apenas conteudo real.
       const items = AdShield.filter(raw);
       if (items.length) {
-        const top = items.slice(0, 12);
+        // Acuracia: os mais reproduzidos primeiro (relevancia por views)
+        const top = rankByPlays(items).slice(0, 12);
         ytSearchCache.set(q, top);
         return top;
       }
@@ -1586,6 +1733,192 @@ function playYouTubeResult(result, results) {
 }
 
 // ============================================
+// PLAYSTATS — CONTAGEM LOCAL DE REPRODUCOES
+// Registra quantas vezes cada faixa foi tocada nesta instalacao.
+// E o sinal de longo prazo do algoritmo de sugestoes: faixas e
+// artistas que o usuario mais reproduz sao mais relevantes
+// (o historico guarda so os ultimos 100 eventos; isto persiste).
+// ============================================
+const PlayStats = (function () {
+  const STORAGE_KEY = 'vibefm_play_stats';
+  const MAX_ENTRIES = 600;
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
+    catch (_) { return {}; }
+  }
+  function persist(m) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(m)); } catch (_) {}
+  }
+
+  function record(track) {
+    if (!track || !track.id) return;
+    const m = load();
+    const prev = m[track.id] || { plays: 0 };
+    m[track.id] = {
+      plays: prev.plays + 1,
+      title: track.title || prev.title || '',
+      artist: track.artist || prev.artist || '',
+      videoId: track.videoId || prev.videoId || '',
+      last: Date.now(),
+    };
+    // Poda: mantem as mais tocadas/recentes para nao crescer sem limite
+    const keys = Object.keys(m);
+    if (keys.length > MAX_ENTRIES) {
+      keys.sort((a, b) => (m[a].plays - m[b].plays) || (m[a].last - m[b].last));
+      keys.slice(0, keys.length - MAX_ENTRIES).forEach(k => delete m[k]);
+    }
+    persist(m);
+  }
+
+  function playsOf(trackId) {
+    const e = load()[trackId];
+    return e ? e.plays : 0;
+  }
+  function playsOfVideo(videoId) {
+    return playsOf('yt_' + videoId);
+  }
+
+  // Total de reproducoes por artista (chave normalizada em minusculas)
+  function artistPlays() {
+    const out = new Map();
+    Object.values(load()).forEach(e => {
+      const a = (e.artist || '').trim().toLowerCase();
+      if (!a) return;
+      out.set(a, (out.get(a) || 0) + e.plays);
+    });
+    return out;
+  }
+
+  function top(n) {
+    return Object.entries(load())
+      .sort((a, b) => (b[1].plays - a[1].plays) || (b[1].last - a[1].last))
+      .slice(0, n || 10)
+      .map(([id, e]) => ({ id, ...e }));
+  }
+
+  return { record, playsOf, playsOfVideo, artistPlays, top };
+})();
+
+// ============================================
+// BUSCA DE PLAYLISTS PRONTAS NO YOUTUBE
+// Mesmas instancias Piped/Invidious da busca de videos, filtro
+// "playlists". Normaliza para { playlistId, title, author, videos,
+// thumbnail } e ranqueia pelo tamanho (nº de videos) como proxy de
+// relevancia — as APIs publicas nao expõem views de playlists.
+// ============================================
+const ytPlaylistSearchCache = new Map();
+
+function normalizePipedPlaylists(items) {
+  return (items || [])
+    .filter(it => it && it.type === 'playlist' && it.url && it.url.includes('list='))
+    .map(it => ({
+      playlistId: extractPlaylistId(it.url),
+      title: it.name || '',
+      author: it.uploaderName || '',
+      videos: (typeof it.videos === 'number' && it.videos > 0) ? it.videos : 0,
+      thumbnail: it.thumbnail || '',
+    }))
+    .filter(it => isValidPlaylistId(it.playlistId));
+}
+
+function normalizeInvidiousPlaylists(items) {
+  return (items || [])
+    .filter(it => it && it.type === 'playlist' && it.playlistId)
+    .map(it => ({
+      playlistId: it.playlistId,
+      title: it.title || '',
+      author: it.author || '',
+      videos: (typeof it.videoCount === 'number' && it.videoCount > 0) ? it.videoCount : 0,
+      thumbnail: it.playlistThumbnail || '',
+    }))
+    .filter(it => isValidPlaylistId(it.playlistId));
+}
+
+async function searchYouTubePlaylists(query) {
+  const q = query.trim();
+  if (ytPlaylistSearchCache.has(q)) return ytPlaylistSearchCache.get(q);
+
+  for (const src of YT_SEARCH_SOURCES) {
+    try {
+      const url = src.kind === 'piped'
+        ? src.base + '/search?q=' + encodeURIComponent(q) + '&filter=playlists'
+        : src.base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=playlist';
+      const res = await fetchWithTimeout(url, 4500);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const raw = src.kind === 'piped'
+        ? normalizePipedPlaylists(data && data.items)
+        : normalizeInvidiousPlaylists(data);
+      const items = AdShield.filter(raw);
+      if (items.length) {
+        // Playlists maiores tendem a ser coletaneas consolidadas
+        const top = items.sort((a, b) => (b.videos || 0) - (a.videos || 0)).slice(0, 8);
+        ytPlaylistSearchCache.set(q, top);
+        return top;
+      }
+    } catch (_) { /* tenta a proxima instancia */ }
+  }
+  ytPlaylistSearchCache.set(q, []);
+  return [];
+}
+
+// ============================================
+// TENDENCIAS — MUSICAS EM ALTA NAS ULTIMAS 24H
+// Usa os endpoints de trending das mesmas instancias publicas:
+//   - Invidious: /api/v1/trending?type=music (categoria Musica)
+//   - Piped:     /trending (geral; heuristica de duracao mantem musica)
+// O trending do YouTube reflete o que esta sendo mais reproduzido na
+// janela recente (~24h). O resultado passa pelo AdShield e pelo mesmo
+// sistema de acuracia: ordenado por reproducoes, do mais para o menos.
+// Cache de 30 min para acompanhar o dia sem martelar as instancias.
+// ============================================
+const TRENDING_CACHE_KEY = 'vibefm_trending_cache';
+const TRENDING_TTL = 30 * 60 * 1000; // 30 min
+const TRENDING_REGION = 'BR';
+
+async function fetchTrendingMusic() {
+  try {
+    const c = JSON.parse(localStorage.getItem(TRENDING_CACHE_KEY) || 'null');
+    if (c && Date.now() - c.at < TRENDING_TTL && Array.isArray(c.items) && c.items.length) {
+      return c.items;
+    }
+  } catch (_) {}
+
+  // Invidious primeiro: tem a categoria "music" nativa no trending
+  const sources = [...YT_SEARCH_SOURCES]
+    .sort((a, b) => (a.kind === 'invidious' ? 0 : 1) - (b.kind === 'invidious' ? 0 : 1));
+
+  for (const src of sources) {
+    try {
+      const url = src.kind === 'piped'
+        ? src.base + '/trending?region=' + TRENDING_REGION
+        : src.base + '/api/v1/trending?type=music&region=' + TRENDING_REGION;
+      const res = await fetchWithTimeout(url, 4500);
+      if (!res.ok) continue;
+      const data = await res.json();
+      let raw;
+      if (src.kind === 'piped') {
+        // Trending geral: mantem apenas duracoes tipicas de musica (1–12 min)
+        const arr = Array.isArray(data) ? data : (data && data.items) || [];
+        raw = normalizePiped(arr).filter(it => it.duration >= 60 && it.duration <= 720);
+      } else {
+        // Algumas versoes do Invidious omitem "type" no trending
+        const arr = (Array.isArray(data) ? data : []).map(it => ({ ...it, type: it.type || 'video' }));
+        raw = normalizeInvidious(arr);
+      }
+      const items = AdShield.filter(raw);
+      if (items.length) {
+        const top = rankByPlays(items).slice(0, 12);
+        try { localStorage.setItem(TRENDING_CACHE_KEY, JSON.stringify({ at: Date.now(), items: top })); } catch (_) {}
+        return top;
+      }
+    } catch (_) { /* tenta a proxima instancia */ }
+  }
+  return [];
+}
+
+// ============================================
 // PLAYLISTS DO USUARIO (persistidas em JSON)
 // localStorage 'vibefm_user_playlists' + exportar/importar arquivo .json
 // Itens: { type:'local', trackId } | { type:'yt', videoId, title, artist, duration }
@@ -1593,11 +1926,36 @@ function playYouTubeResult(result, results) {
 const UserPlaylists = (function () {
   const STORAGE_KEY = 'vibefm_user_playlists';
 
+  // Remove itens com o mesmo ID (itemKey) dentro de uma mesma lista,
+  // preservando a primeira ocorrencia. Usado como defesa em todos os
+  // caminhos de escrita (usuario, sistema, importacao).
+  function dedupeItems(items) {
+    const seen = new Set();
+    return (Array.isArray(items) ? items : []).filter(it => {
+      if (!it) return false;
+      const key = itemKey(it);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       const pls = raw ? JSON.parse(raw) : [];
-      return Array.isArray(pls) ? pls : [];
+      if (!Array.isArray(pls)) return [];
+      // Saneia duplicatas por ID dentro de cada playlist (dados legados
+      // ou gravados por qualquer outro caminho).
+      let changed = false;
+      pls.forEach(pl => {
+        if (!pl || !Array.isArray(pl.items)) return;
+        const unique = dedupeItems(pl.items);
+        if (unique.length !== pl.items.length) changed = true;
+        pl.items = unique;
+      });
+      if (changed) persist(pls);
+      return pls;
     } catch (_) { return []; }
   }
 
@@ -1633,7 +1991,9 @@ const UserPlaylists = (function () {
       showToast('Esta faixa já está na playlist.');
       return false;
     }
-    pl.items.push(item);
+    // Mais recente primeiro: novas faixas entram no topo da playlist
+    item.addedAt = Date.now();
+    pl.items.unshift(item);
     persist(pls);
     showToast('Adicionada à playlist "' + pl.name + '"');
     return true;
@@ -1644,6 +2004,23 @@ const UserPlaylists = (function () {
     const pl = pls.find(p => p.id === playlistId);
     if (!pl) return;
     pl.items = pl.items.filter(it => itemKey(it) !== key);
+    persist(pls);
+  }
+
+  // Reordena os itens da playlist para seguir a lista de chaves informada
+  // (chaves ausentes mantem a posicao relativa ao final). Usado pelo
+  // drag and drop das faixas.
+  function setOrder(playlistId, keys) {
+    const pls = load();
+    const pl = pls.find(p => p.id === playlistId);
+    if (!pl) return;
+    const byKey = new Map(pl.items.map(it => [itemKey(it), it]));
+    const ordered = [];
+    (keys || []).forEach(k => {
+      if (byKey.has(k)) { ordered.push(byKey.get(k)); byKey.delete(k); }
+    });
+    byKey.forEach(it => ordered.push(it));
+    pl.items = ordered;
     persist(pls);
   }
 
@@ -1679,7 +2056,7 @@ const UserPlaylists = (function () {
         for (const p of imported) {
           if (!p || !p.name || !Array.isArray(p.items)) continue;
           if (existing.has(p.id)) continue;
-          pls.push({ id: p.id || ('u' + Math.random().toString(36).slice(2)), name: String(p.name).slice(0, 60), createdAt: p.createdAt || Date.now(), items: p.items });
+          pls.push({ id: p.id || ('u' + Math.random().toString(36).slice(2)), name: String(p.name).slice(0, 60), createdAt: p.createdAt || Date.now(), items: dedupeItems(p.items) });
           added++;
         }
         persist(pls);
@@ -1692,7 +2069,7 @@ const UserPlaylists = (function () {
     reader.readAsText(file);
   }
 
-  return { load, create, remove, addItem, removeItem, itemKey, tracksOf, exportJson, importJson };
+  return { load, create, remove, addItem, removeItem, itemKey, setOrder, tracksOf, exportJson, importJson };
 })();
 
 // ============================================
@@ -1783,6 +2160,93 @@ function likeItem(item) {
   showToast('Adicionada à playlist "Curtidas"');
 }
 
+// ============================================
+// DRAG AND DROP DE FAIXAS (playlists do usuario)
+// Adiciona uma alca de arrastar em cada linha e reordena a lista ao
+// soltar. Usa Pointer Events (mouse e toque). Nao altera a logica de
+// reproducao: apenas a ordem persistida via UserPlaylists.setOrder.
+// ============================================
+function enableTrackDrag(list, onReorder) {
+  Array.from(list.children).forEach(row => {
+    if (row.querySelector('.drag-handle')) return;
+    const handle = document.createElement('button');
+    handle.className = 'row-action-btn drag-handle';
+    handle.title = 'Arrastar para reordenar';
+    handle.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+    handle.addEventListener('click', (e) => e.stopPropagation());
+    handle.addEventListener('pointerdown', (e) => startRowDrag(e, row, list, () => {
+      if (typeof onReorder === 'function') onReorder();
+    }));
+    row.insertBefore(handle, row.firstChild);
+  });
+}
+
+// Nucleo compartilhado do arrasto vertical de linhas (mouse e toque).
+// Move a linha entre os irmaos enquanto arrasta e, ao soltar, chama
+// onDrop(fromIndex, toIndex) se a posicao mudou.
+function startRowDrag(e, row, list, onDrop) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fromIndex = Array.prototype.indexOf.call(list.children, row);
+  row.classList.add('dragging');
+
+  const onMove = (ev) => {
+    ev.preventDefault();
+    const y = ev.clientY;
+    const siblings = Array.from(list.children).filter(c => c !== row);
+    let next = null;
+    for (const sib of siblings) {
+      const r = sib.getBoundingClientRect();
+      if (y < r.top + r.height / 2) { next = sib; break; }
+    }
+    if (next) list.insertBefore(row, next);
+    else list.appendChild(row);
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    row.classList.remove('dragging');
+    const toIndex = Array.prototype.indexOf.call(list.children, row);
+    if (toIndex !== fromIndex && typeof onDrop === 'function') onDrop(fromIndex, toIndex);
+  };
+  document.addEventListener('pointermove', onMove, { passive: false });
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+}
+
+// ============================================
+// MENU "..." POR FAIXA (mobile)
+// Bottom sheet com as acoes que, no mobile, saem da linha
+// ("Adicionar a playlist" e "Salvar link").
+// ============================================
+function openTrackMenu(title, actions) {
+  const old = document.getElementById('track-menu');
+  if (old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'track-menu';
+  overlay.innerHTML = '<div class="track-menu-backdrop"></div><div class="track-menu-sheet"><div class="track-menu-title"></div></div>';
+  overlay.querySelector('.track-menu-title').textContent = title || '';
+  const sheet = overlay.querySelector('.track-menu-sheet');
+
+  actions.forEach(a => {
+    const btn = document.createElement('button');
+    btn.className = 'track-menu-item';
+    btn.innerHTML = (a.icon || '') + '<span></span>';
+    btn.querySelector('span').textContent = a.label;
+    btn.addEventListener('click', () => { overlay.remove(); a.onClick(); });
+    sheet.appendChild(btn);
+  });
+
+  overlay.querySelector('.track-menu-backdrop').addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
+}
+
+const MENU_ICON_ADD = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>';
+const MENU_ICON_SAVE = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>';
+const MENU_ICON_DOTS = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+
 function openPlaylistChooser(item) {
   const old = document.getElementById('pl-chooser');
   if (old) old.remove();
@@ -1862,7 +2326,7 @@ function openPlaylistChooser(item) {
 
 // Cartao de link salvo reutilizavel (usado na Biblioteca e na secao da Home).
 // onChange e chamado apos fixar/remover para atualizar a lista que o exibe.
-function createGalleryCard(item, onChange) {
+function createGalleryCard(item, onChange, mode) {
   const key = Gallery.keyOf(item);
   const isPlaylist = !!item.list;
   const pinned = Gallery.isPinned(key);
@@ -1913,11 +2377,16 @@ function createGalleryCard(item, onChange) {
   // Botao remover
   const del = document.createElement('button');
   del.className = 'gallery-del';
-  del.title = 'Remover';
+  del.title = mode === 'hideFromHome' ? 'Ocultar da Home' : 'Remover';
   del.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>';
   del.addEventListener('click', (e) => {
     e.stopPropagation();
-    Gallery.remove(key);
+    if (mode === 'hideFromHome') {
+      Gallery.hideFromHome(key);
+      showToast('Oculto da Home. Acesse "Links Salvos" na Biblioteca para ver todos.');
+    } else {
+      Gallery.remove(key);
+    }
     if (onChange) onChange();
   });
   coverWrap.appendChild(del);
@@ -1949,6 +2418,8 @@ function createGalleryCard(item, onChange) {
 
 function renderSaved() {
   const items = Gallery.loadSorted();
+  const hiddenItems = items.filter((it) => Gallery.isHiddenFromHome(Gallery.keyOf(it)));
+  const visibleItems = items.filter((it) => !Gallery.isHiddenFromHome(Gallery.keyOf(it)));
 
   main.innerHTML = `
     <div class="section">
@@ -1961,12 +2432,44 @@ function renderSaved() {
           <p>Nenhum link salvo ainda.</p>
           <p style="font-size:11px;color:var(--text-muted)">Cole uma URL do YouTube na Busca e clique em Salvar.</p>
         </div>`}
+      ${hiddenItems.length ? `
+        <div style="margin-top:32px">
+          <h3 class="section-title" style="margin-bottom:6px;font-size:16px">Ocultos da Home</h3>
+          <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Estes itens foram ocultados da seção "Links Salvos" no Início, mas continuam disponíveis aqui.</p>
+          <div class="album-grid" id="gallery-hidden-grid"></div>
+        </div>` : ''}
     </div>
   `;
 
   const grid = document.getElementById('gallery-grid');
-  if (!grid) return;
-  items.forEach((item) => grid.appendChild(createGalleryCard(item, renderSaved)));
+  if (grid) visibleItems.forEach((item) => grid.appendChild(createGalleryCard(item, renderSaved)));
+
+  const hiddenGrid = document.getElementById('gallery-hidden-grid');
+  if (hiddenGrid) {
+    hiddenItems.forEach((item) => {
+      const card = createGalleryCard(item, renderSaved);
+      // Adicionar badge de "Oculto da Home" no card
+      const badge = document.createElement('div');
+      badge.style.cssText = 'position:absolute;top:6px;left:50%;transform:translateX(-50%);z-index:5;padding:2px 8px;font-size:9px;font-weight:700;letter-spacing:0.06em;color:#fff;background:rgba(10,228,72,0.85);border-radius:4px;pointer-events:none;';
+      badge.textContent = 'OCULTO DA HOME';
+      card.querySelector('.album-cover-wrap').appendChild(badge);
+      // Mudar o título do botão de remover para "Restaurar na Home"
+      const delBtn = card.querySelector('.gallery-del');
+      if (delBtn) {
+        delBtn.title = 'Restaurar na Home';
+        delBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          Gallery.unhideFromHome(Gallery.keyOf(item));
+          showToast('Restaurado na Home!');
+          renderSaved();
+          // Se estiver na home, atualiza o carrossel
+          if (state.view === 'home') renderHomeSaved();
+        };
+      }
+      hiddenGrid.appendChild(card);
+    });
+  }
 }
 
 // ============================================
@@ -2025,20 +2528,26 @@ function likedPlaylistConfig() {
   };
 }
 
-// Repopula apenas o carrossel de "Links Salvos" da Home (fixados primeiro).
+// Repopula apenas o carrossel de "Links Salvos" da Home (fixados primeiro, ocultos filtrados).
 function renderHomeSaved() {
   const track = document.getElementById('home-saved-carousel');
   if (!track) return;
-  const items = Gallery.loadSorted();
+  const items = Gallery.loadSortedForHome();
   track.replaceChildren();
   if (!items.length) {
     const p = document.createElement('p');
     p.style.cssText = 'font-size:12px;color:var(--text-muted);padding:8px 0';
-    p.textContent = 'Nenhum link salvo ainda. Cole uma URL do YouTube na Busca e clique em Salvar.';
+    const allItems = Gallery.loadSorted();
+    const hiddenCount = allItems.length - items.length;
+    p.textContent = allItems.length === 0
+      ? 'Nenhum link salvo ainda. Cole uma URL do YouTube na Busca e clique em Salvar.'
+      : hiddenCount > 0
+        ? hiddenCount + ' link(s) oculto(s) da Home. Ver todos em "Links Salvos" na Biblioteca.'
+        : 'Nenhum link salvo ainda.';
     track.appendChild(p);
     return;
   }
-  items.forEach(item => track.appendChild(createGalleryCard(item, renderHomeSaved)));
+  items.forEach(item => track.appendChild(createGalleryCard(item, renderHomeSaved, 'hideFromHome')));
 }
 
 function renderHome() {
@@ -2405,6 +2914,18 @@ function togglePlaylistExpand(cfg, clickedCard) {
         row.insertBefore(rm, row.querySelector('.track-duration'));
       });
     }
+    // Reordenacao por drag and drop (apenas playlists do usuario)
+    if (cfg.isUser) {
+      enableTrackDrag(list, () => {
+        const idOrder = Array.from(list.children).map(r => r.dataset.track);
+        cfg.tracks.sort((a, b) => idOrder.indexOf(a.id) - idOrder.indexOf(b.id));
+        const keys = cfg.tracks.map(t => t.id.startsWith('yt_') ? 'y:' + t.videoId : 'l:' + t.id);
+        UserPlaylists.setOrder(cfg.id, keys);
+        // Re-renderiza a lista expandida com a nova ordem
+        lastExpandedCardId = null;
+        togglePlaylistExpand(cfg, clickedCard);
+      });
+    }
     body.appendChild(list);
   } else if (cfg.isDynamic) {
     body.innerHTML = '<p class="pl-acc-empty">Carregando faixas\u2026</p>';
@@ -2511,6 +3032,17 @@ function playlistAccordionItem(cfg) {
         row.insertBefore(rm, row.querySelector('.track-duration'));
       });
     }
+    // Reordenacao por drag and drop (apenas playlists do usuario)
+    if (cfg.isUser) {
+      enableTrackDrag(list, () => {
+        const idOrder = Array.from(list.children).map(r => r.dataset.track);
+        const tracks = idOrder.map(getTrack).filter(Boolean);
+        const keys = tracks.map(t => t.id.startsWith('yt_') ? 'y:' + t.videoId : 'l:' + t.id);
+        UserPlaylists.setOrder(cfg.id, keys);
+        // Re-renderiza mantendo o acordeao expandido (expandedPlaylists persiste)
+        renderLibrary();
+      });
+    }
     body.appendChild(list);
   } else if (cfg.isDynamic) {
     body.innerHTML = '<p class="pl-acc-empty">Carregando faixas\u2026</p>';
@@ -2545,6 +3077,11 @@ function renderSearch() {
             </div>
           `).join('')}
         </div>
+        <div id="search-trending" style="margin-top:32px">
+          <h3 class="section-title" style="margin-bottom:4px">Tendências</h3>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">As músicas em alta no YouTube nas últimas 24 horas, da mais reproduzida para a menos.</p>
+          <div id="trending-results"><p class="yt-search-status">Carregando tendências\u2026</p></div>
+        </div>
       </div>
     </div>
   `;
@@ -2558,8 +3095,26 @@ function renderSearch() {
     });
   });
 
+  // Tendencias (assincrono; some junto com #search-genres durante uma busca)
+  loadTrendingSection();
+
   // Reexecuta a busca atual (se houver texto na barra superior)
   performSearch(globalSearchInput.value.trim());
+}
+
+// Preenche a secao "Tendencias" da pagina de busca
+async function loadTrendingSection() {
+  if (!document.getElementById('trending-results')) return;
+  const items = await fetchTrendingMusic();
+  const box = document.getElementById('trending-results');
+  if (!box) return; // usuario trocou de view enquanto carregava
+  if (!items.length) {
+    box.innerHTML = '<p class="yt-search-status">Tendências indisponíveis no momento. Tente novamente mais tarde.</p>';
+    return;
+  }
+  // Reusa as linhas da busca: numeracao, reproducoes, adicionar/salvar,
+  // menu "..." no mobile e clique para tocar (fila = lista de tendencias)
+  renderYtSearchResults(box, items);
 }
 
 async function performSearch(raw) {
@@ -2706,12 +3261,12 @@ function renderYtSearchResults(container, results) {
     t.textContent = r.title;
     const a = document.createElement('div');
     a.className = 'track-artist';
-    a.textContent = r.author;
+    a.textContent = r.author + (r.views ? ' \u00B7 ' + fmtViews(r.views) : '');
     details.appendChild(t);
     details.appendChild(a);
 
     const addBtn = document.createElement('button');
-    addBtn.className = 'row-action-btn';
+    addBtn.className = 'row-action-btn yt-add-btn';
     addBtn.title = 'Adicionar à playlist';
     addBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>';
     addBtn.addEventListener('click', (e) => {
@@ -2720,12 +3275,25 @@ function renderYtSearchResults(container, results) {
     });
 
     const saveBtn = document.createElement('button');
-    saveBtn.className = 'row-action-btn';
+    saveBtn.className = 'row-action-btn yt-save-btn';
     saveBtn.title = 'Salvar link';
     saveBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>';
     saveBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       Gallery.save({ id: r.videoId, list: null, title: r.title });
+    });
+
+    // Menu "..." (mobile): concentra Adicionar e Salvar
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'row-action-btn track-menu-btn';
+    menuBtn.title = 'Mais opções';
+    menuBtn.innerHTML = MENU_ICON_DOTS;
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openTrackMenu(r.title, [
+        { label: 'Adicionar à playlist', icon: MENU_ICON_ADD, onClick: () => openPlaylistChooser({ type: 'yt', videoId: r.videoId, title: r.title, artist: r.author, duration: r.duration }) },
+        { label: 'Salvar link', icon: MENU_ICON_SAVE, onClick: () => Gallery.save({ id: r.videoId, list: null, title: r.title }) },
+      ]);
     });
 
     const dur = document.createElement('div');
@@ -2737,6 +3305,7 @@ function renderYtSearchResults(container, results) {
     row.appendChild(details);
     row.appendChild(addBtn);
     row.appendChild(saveBtn);
+    row.appendChild(menuBtn);
     row.appendChild(dur);
     row.addEventListener('click', () => playYouTubeResult(r, results));
     list.appendChild(row);
@@ -2986,6 +3555,7 @@ function trackRow(track, num, tracks) {
       <button class="row-action-btn track-add-btn" data-add-track="${track.id}" title="Adicionar à playlist">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>
       </button>
+      <button class="row-action-btn track-menu-btn" data-menu-track="${track.id}" title="Mais opções">${MENU_ICON_DOTS}</button>
       <div class="track-duration">${fmtTime(track.duration)}</div>
     </div>
   `;
@@ -3017,6 +3587,22 @@ function attachTrackListeners() {
         ? { type: 'yt', videoId: track.videoId, title: track.title, artist: track.artist, duration: track.duration }
         : { type: 'local', trackId: track.id };
       openPlaylistChooser(item);
+    });
+  });
+  // Menu "..." (mobile): concentra as acoes da linha
+  document.querySelectorAll('[data-menu-track]').forEach(btn => {
+    if (btn.dataset.wiredMenu) return;
+    btn.dataset.wiredMenu = '1';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const track = getTrack(btn.dataset.menuTrack);
+      if (!track) return;
+      const item = track.id.startsWith('yt_')
+        ? { type: 'yt', videoId: track.videoId, title: track.title, artist: track.artist, duration: track.duration }
+        : { type: 'local', trackId: track.id };
+      openTrackMenu(track.title, [
+        { label: 'Adicionar à playlist', icon: MENU_ICON_ADD, onClick: () => openPlaylistChooser(item) },
+      ]);
     });
   });
 }

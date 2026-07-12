@@ -107,6 +107,21 @@ const Reco = (function () {
       if (it.srcGenre) bump(genres, it.srcGenre.toLowerCase(), 2);
     });
 
+    // Contagem local de reproducoes — sinal de longo prazo por acuracia:
+    // artistas que o usuario mais reproduz pesam mais (escala logaritmica
+    // para nao deixar um unico artista dominar todas as sugestoes)
+    if (typeof PlayStats !== 'undefined') {
+      PlayStats.artistPlays().forEach((plays, a) => {
+        if (!a) return;
+        bump(artists, a, Math.min(5, Math.log2(1 + plays) * 1.2));
+      });
+      // Recupera nomes exibiveis a partir das faixas mais tocadas
+      PlayStats.top(30).forEach(e => {
+        const a = normArtist(e.artist);
+        if (a && !displayName.has(a)) displayName.set(a, e.artist);
+      });
+    }
+
     // Historico — com decaimento por recencia (~3 semanas de meia-vida)
     const now = Date.now();
     (state.history || []).forEach(h => {
@@ -173,14 +188,26 @@ const Reco = (function () {
       let s = 1;
       s += Math.min(6, artistScore(c.author));   // relevancia: artista do gosto
       s += (c._hits - 1) * 0.6;                   // corroborado por varias sementes
+
+      // Acuracia por quantidade de reproducao (views globais):
+      // o mais reproduzido e mais relevante — escala log, 0 a +3
+      // (1 mil views ~ 0, 1 mi ~ +2, 1 bi ~ +3 com teto)
+      const v = c.views || 0;
+      s += Math.min(3, Math.max(0, Math.log10(v + 1) - 3));
+
+      // Afinidade pessoal: quantas vezes ESTE usuario ja tocou a faixa
+      const myPlays = (typeof PlayStats !== 'undefined') ? PlayStats.playsOfVideo(c.videoId) : 0;
+
       const id = 'yt_' + c.videoId;
       const liked = state.likedTracks.has(id);
       const age = recent.has(c.videoId) ? recent.get(c.videoId) : Infinity;
       if (mode === 'discover') {
         if (liked) s -= 5;                        // quero material novo
+        if (myPlays > 0) s -= Math.min(4, 1 + myPlays); // ja conhecido: descobrir e para o novo
         if (age < 30) s -= 3 * Math.exp(-age / 15);
       } else {
         if (liked) s += 1.2;                      // um pouco de conforto no mix diario
+        s += 0.35 * Math.min(4, myPlays);         // faixas que o usuario reproduz mais sobem
         if (age < 14) s -= 2 * Math.exp(-age / 10); // evita repetir o muito recente
       }
       c._score = s;
@@ -251,6 +278,135 @@ const Reco = (function () {
     });
     showToast('Mix salvo em "' + pl.name + '"');
     return pl;
+  }
+
+  // ---------- radio continuo (retencao) ----------
+  // Chamado por nextTrack quando a fila local acaba com repeat off:
+  // gera sugestoes parecidas (perfil + faixa/artista atual), remove o
+  // que ja esta na fila e ANEXA ao fim de state.queue, devolvendo
+  // quantas faixas entraram. Assim a musica nunca "morre" no fim da
+  // fila — o usuario permanece ouvindo.
+  async function extendQueue(size) {
+    size = size || 10;
+    const profile = buildProfile();
+
+    // A faixa atual e a semente mais forte do momento
+    const cur = state.currentTrack;
+    const curArtist = cur && cur.artist ? normArtist(cur.artist) : '';
+    if (curArtist) {
+      profile.artists.set(curArtist, (profile.artists.get(curArtist) || 0) + 5);
+      const has = profile.topArtists.some(a => a.key === curArtist);
+      if (!has) profile.topArtists.unshift({ key: curArtist, artist: cur.artist, score: 5 });
+    }
+    if (!profile.topArtists.length && !profile.topGenres.length) return 0;
+
+    const cands = await gatherCandidates(profile, {
+      discover: false, fresh: false, artistSeeds: 4, genreSeeds: 2,
+    });
+    score(cands, profile, 'mix');
+
+    // Nao repete o que ja esta na fila nem a faixa atual
+    const inQueue = new Set((state.queue || []).map(t => t.videoId).filter(Boolean));
+    const fresh = cands.filter(c => c.videoId && !inQueue.has(c.videoId));
+    if (!fresh.length) return 0;
+
+    const rng = mulberry32((Date.now() & 0xffff) ^ 0x9e37);
+    const chosen = diversify(fresh, size, rng, 2);
+    const tracks = chosen.map(c => materializeYtTrack(c.videoId, c.title, c.author, c.duration));
+    tracks.forEach(t => state.queue.push(t));
+    return tracks.length;
+  }
+
+  // ---------- playlists prontas do YouTube dentro dos gostos ----------
+  // Ate 3 playlists publicas do YouTube alinhadas aos generos do
+  // usuario, exibidas em "Mixes para Você" ao lado de
+  // "Mix do dia" e "Descobrir".
+  const YT_PL_CACHE_KEY = 'vibefm_taste_yt_playlists';
+  const YT_PL_TTL = 6 * 60 * 60 * 1000; // 6h
+
+  async function loadTasteYtPlaylists(force) {
+    const tastes = (typeof Tastes !== 'undefined' ? Tastes.load() : []).slice(0, 3);
+    if (!tastes.length || typeof searchYouTubePlaylists !== 'function') return [];
+    const tasteKey = tastes.map(t => t.toLowerCase()).join('|');
+
+    if (!force) {
+      try {
+        const c = JSON.parse(localStorage.getItem(YT_PL_CACHE_KEY) || 'null');
+        if (c && c.tasteKey === tasteKey && Date.now() - c.at < YT_PL_TTL && Array.isArray(c.items)) {
+          return c.items;
+        }
+      } catch (_) {}
+    }
+
+    const lists = await mapLimit(tastes, 2, async g => {
+      const r = await searchYouTubePlaylists(g + ' playlist');
+      // A melhor por genero (ja vem ranqueada por tamanho)
+      return (r && r[0]) ? { ...r[0], _genre: g } : null;
+    });
+
+    const seen = new Set();
+    const items = lists.filter(Boolean).filter(p => {
+      if (seen.has(p.playlistId)) return false;
+      seen.add(p.playlistId);
+      return true;
+    }).slice(0, 3); // maximo de 3 alem de Mix do dia/Descobrir
+
+    try {
+      localStorage.setItem(YT_PL_CACHE_KEY, JSON.stringify({ tasteKey, at: Date.now(), items }));
+    } catch (_) {}
+    return items;
+  }
+
+  // Card de playlist pronta do YouTube (toca via playFromUrl)
+  function ytPlaylistCard(p) {
+    const card = document.createElement('div');
+    card.className = 'album-card playlist-home-card';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'album-cover-wrap';
+    if (p.thumbnail) {
+      const img = document.createElement('img');
+      img.src = p.thumbnail; img.alt = ''; img.loading = 'lazy';
+      img.onerror = function () { this.remove(); };
+      wrap.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(10,228,72,0.15),rgba(0,0,0,0.5));color:var(--text-muted)';
+      ph.innerHTML = '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="4" y1="6" x2="16" y2="6" stroke-linecap="round"/><line x1="4" y1="11" x2="16" y2="11" stroke-linecap="round"/><line x1="4" y1="16" x2="12" y2="16" stroke-linecap="round"/><path d="M18 10.5l5 3-5 3z" fill="currentColor" stroke="none"/></svg>';
+      wrap.appendChild(ph);
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'album-overlay';
+    overlay.innerHTML = '<button class="album-play-btn"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>';
+    wrap.appendChild(overlay);
+
+    const info = document.createElement('div');
+    info.className = 'album-info';
+    const title = document.createElement('div');
+    title.className = 'album-title'; title.textContent = p.title;
+    const sub = document.createElement('div');
+    sub.className = 'album-artist';
+    sub.textContent = [
+      p.videos ? p.videos + ' vídeos' : null,
+      'playlist do YouTube',
+      p._genre || null,
+    ].filter(Boolean).join(' \u00B7 ');
+    info.appendChild(title); info.appendChild(sub);
+
+    card.appendChild(wrap); card.appendChild(info);
+
+    const play = () => {
+      if (typeof playFromUrl === 'function') {
+        playFromUrl('https://www.youtube.com/playlist?list=' + p.playlistId);
+      }
+    };
+    overlay.querySelector('.album-play-btn').addEventListener('click', (e) => { e.stopPropagation(); play(); });
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.album-play-btn')) return;
+      play();
+    });
+    return card;
   }
 
   // ---------- novidades ----------
@@ -345,7 +501,7 @@ const Reco = (function () {
   }
 
   // Monta a secao "Mixes para voce" dentro de um elemento carrossel ja existente
-  async function renderMixes(carouselId) {
+  async function renderMixes(carouselId, force) {
     const carousel = document.getElementById(carouselId);
     if (!carousel) return;
     const defs = [
@@ -363,6 +519,12 @@ const Reco = (function () {
         cover: tracks[0] && tracks[0].cover,
       }));
     }
+    // Playlists prontas do YouTube dentro dos gostos (maximo 3),
+    // alem de "Mix do dia" e "Descobrir"
+    try {
+      const ytPls = await loadTasteYtPlaylists(force);
+      ytPls.forEach(p => carousel.appendChild(ytPlaylistCard(p)));
+    } catch (_) { /* segue sem as playlists externas */ }
     if (!carousel.children.length) {
       const p = document.createElement('p');
       p.style.cssText = 'font-size:12px;color:var(--text-muted)';
@@ -408,7 +570,8 @@ const Reco = (function () {
   async function refreshAll(carouselId, rowId, sectionId) {
     mixCache.clear();
     try { localStorage.removeItem(NEWS_CACHE_KEY); } catch (_) {}
-    await renderMixes(carouselId);
+    try { localStorage.removeItem(YT_PL_CACHE_KEY); } catch (_) {}
+    await renderMixes(carouselId, true);
     await renderNews(rowId, sectionId);
   }
 
@@ -416,5 +579,6 @@ const Reco = (function () {
     recordLike, hydrateLikes, buildProfile,
     buildMix, saveMixAsPlaylist, loadNews,
     renderMixes, renderNews, refreshAll,
+    extendQueue, loadTasteYtPlaylists,
   };
 })();
