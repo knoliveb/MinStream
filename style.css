@@ -1114,6 +1114,42 @@ body.theater-open #theater-backdrop {
 }
 
 /* ============================================
+   SEARCH PAGE CAROUSELS
+   ============================================ */
+
+/* Genre cards inside carousel */
+#search-genres-carousel .genre-card {
+  flex: none;
+  width: 180px;
+  height: 120px;
+  scroll-snap-align: start;
+}
+
+/* Trending cards inside carousel - use album-card style */
+#search-trending-carousel .album-card {
+  flex: none;
+  width: 180px;
+  scroll-snap-align: start;
+}
+
+#search-trending-carousel .album-cover-wrap {
+  aspect-ratio: 16 / 9;
+}
+
+#search-trending-carousel .album-title {
+  font-size: 12px;
+}
+
+#search-trending-carousel .album-artist {
+  font-size: 10.5px;
+}
+
+/* Hide genre-grid on search page (now using carousel) */
+#search-genres .genre-grid {
+  display: none;
+}
+
+/* ============================================
    PROFILE
    ============================================ */
 .profile-header {

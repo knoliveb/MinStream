@@ -1864,18 +1864,14 @@ async function searchYouTubePlaylists(query) {
 }
 
 // ============================================
-// TENDENCIAS — MUSICAS EM ALTA NAS ULTIMAS 24H
-// Usa os endpoints de trending das mesmas instancias publicas:
-//   - Invidious: /api/v1/trending?type=music (categoria Musica)
-//   - Piped:     /trending (geral; heuristica de duracao mantem musica)
-// O trending do YouTube reflete o que esta sendo mais reproduzido na
-// janela recente (~24h). O resultado passa pelo AdShield e pelo mesmo
-// sistema de acuracia: ordenado por reproducoes, do mais para o menos.
+// TENDENCIAS — CONTEUDO MAIS VISTO BASEADO NOS GOSTOS DO USUARIO
+// Busca por queries derivadas dos gostos do usuario (Tastes), combinando
+// resultados de multiplas buscas e ordenando por visualizacoes (mais vistos primeiro).
+// Assim as "Tendencias" refletem o que esta em alta DENTRO dos gostos do usuario.
 // Cache de 30 min para acompanhar o dia sem martelar as instancias.
 // ============================================
 const TRENDING_CACHE_KEY = 'vibefm_trending_cache';
 const TRENDING_TTL = 30 * 60 * 1000; // 30 min
-const TRENDING_REGION = 'BR';
 
 async function fetchTrendingMusic() {
   try {
@@ -1885,37 +1881,57 @@ async function fetchTrendingMusic() {
     }
   } catch (_) {}
 
-  // Invidious primeiro: tem a categoria "music" nativa no trending
-  const sources = [...YT_SEARCH_SOURCES]
-    .sort((a, b) => (a.kind === 'invidious' ? 0 : 1) - (b.kind === 'invidious' ? 0 : 1));
-
-  for (const src of sources) {
-    try {
-      const url = src.kind === 'piped'
-        ? src.base + '/trending?region=' + TRENDING_REGION
-        : src.base + '/api/v1/trending?type=music&region=' + TRENDING_REGION;
-      const res = await fetchWithTimeout(url, 4500);
-      if (!res.ok) continue;
-      const data = await res.json();
-      let raw;
-      if (src.kind === 'piped') {
-        // Trending geral: mantem apenas duracoes tipicas de musica (1–12 min)
-        const arr = Array.isArray(data) ? data : (data && data.items) || [];
-        raw = normalizePiped(arr).filter(it => it.duration >= 60 && it.duration <= 720);
-      } else {
-        // Algumas versoes do Invidious omitem "type" no trending
-        const arr = (Array.isArray(data) ? data : []).map(it => ({ ...it, type: it.type || 'video' }));
-        raw = normalizeInvidious(arr);
-      }
-      const items = AdShield.filter(raw);
-      if (items.length) {
-        const top = rankByPlays(items).slice(0, 12);
-        try { localStorage.setItem(TRENDING_CACHE_KEY, JSON.stringify({ at: Date.now(), items: top })); } catch (_) {}
-        return top;
-      }
-    } catch (_) { /* tenta a proxima instancia */ }
+  // Constroi queries a partir dos gostos do usuario
+  const tastes = Tastes.load();
+  const year = new Date().getFullYear();
+  const queries = [];
+  tastes.forEach(g => {
+    queries.push(g + ' music ' + year);
+    queries.push(g + ' hits ' + year);
+    queries.push('melhores ' + g + ' ' + year);
+  });
+  // Tambem busca por artistas mais ouvidos do usuario
+  if (typeof PlayStats !== 'undefined') {
+    PlayStats.top(5).forEach(e => {
+      if (e.artist) queries.push(e.artist + ' ' + year);
+    });
   }
-  return [];
+
+  const uniq = [...new Set(queries.map(q => q.trim()).filter(Boolean))];
+  if (!uniq.length) return [];
+
+  // Executa as buscas com concorrencia limitada (max 3 simultaneas)
+  const allResults = [];
+  const concurrency = 3;
+  for (let i = 0; i < uniq.length; i += concurrency) {
+    const batch = uniq.slice(i, i + concurrency);
+    const results = await Promise.all(batch.map(q => searchYouTube(q).catch(() => [])));
+    results.forEach(list => allResults.push(...list));
+  }
+
+  // Deduplica por videoId e soma views
+  const byId = new Map();
+  allResults.forEach(r => {
+    if (!r.videoId) return;
+    const existing = byId.get(r.videoId);
+    if (existing) {
+      existing.views = Math.max(existing.views || 0, r.views || 0);
+      existing._hits = (existing._hits || 1) + 1;
+    } else {
+      byId.set(r.videoId, { ...r, _hits: 1 });
+    }
+  });
+
+  // Ordena por visualizacoes (mais vistos primeiro) e pega os top 16
+  const items = [...byId.values()]
+    .sort((a, b) => (b.views || 0) - (a.views || 0))
+    .slice(0, 16);
+
+  if (items.length) {
+    try { localStorage.setItem(TRENDING_CACHE_KEY, JSON.stringify({ at: Date.now(), items })); } catch (_) {}
+  }
+
+  return items;
 }
 
 // ============================================
@@ -3068,32 +3084,38 @@ function renderSearch() {
     <div class="section">
       <div id="search-results"></div>
       <div id="search-genres">
-        <h3 class="section-title" style="margin-bottom:16px">Explorar seus Gostos</h3>
-        <div class="genre-grid">
-          ${Tastes.load().map(g => `
-            <div class="genre-card" data-genre="${escapeHtml(g)}">
-              <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
-              <span class="genre-name">${escapeHtml(g)}</span>
-            </div>
-          `).join('')}
-        </div>
+        <!-- Explorar seus Gostos como carrossel -->
+        <h3 class="section-title" style="margin-bottom:14px">Explorar seus Gostos</h3>
+        ${buildCarousel('search-genres', 'search-genres-carousel')}
+
+        <!-- Tendências como carrossel -->
         <div id="search-trending" style="margin-top:32px">
           <h3 class="section-title" style="margin-bottom:4px">Tendências</h3>
-          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">As músicas em alta no YouTube nas últimas 24 horas, da mais reproduzida para a menos.</p>
-          <div id="trending-results"><p class="yt-search-status">Carregando tendências\u2026</p></div>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">O mais visto no YouTube baseado nos seus gostos.</p>
+          ${buildCarousel('search-trending', 'search-trending-carousel')}
+          <div id="trending-results" style="display:none"></div>
         </div>
       </div>
     </div>
   `;
 
-  // Clique em um gosto -> busca por ele (via barra superior)
-  document.querySelectorAll('.genre-card[data-genre]').forEach(card => {
-    card.addEventListener('click', () => {
-      globalSearchInput.value = card.dataset.genre;
-      performSearch(card.dataset.genre);
-      globalSearchInput.focus();
+  // Preenche o carrossel de gostos com cards de genero
+  const genresTrack = document.getElementById('search-genres-carousel');
+  if (genresTrack) {
+    Tastes.load().forEach(g => {
+      const card = document.createElement('div');
+      card.className = 'genre-card';
+      card.dataset.genre = g;
+      card.innerHTML = `<svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg><span class="genre-name">${escapeHtml(g)}</span>`;
+      card.addEventListener('click', () => {
+        globalSearchInput.value = g;
+        performSearch(g);
+        globalSearchInput.focus();
+      });
+      genresTrack.appendChild(card);
     });
-  });
+  }
+  attachCarouselArrows('search-genres');
 
   // Tendencias (assincrono; some junto com #search-genres durante uma busca)
   loadTrendingSection();
@@ -3102,19 +3124,63 @@ function renderSearch() {
   performSearch(globalSearchInput.value.trim());
 }
 
-// Preenche a secao "Tendencias" da pagina de busca
+// Preenche a secao "Tendencias" da pagina de busca (agora um carrossel)
 async function loadTrendingSection() {
-  if (!document.getElementById('trending-results')) return;
+  const carousel = document.getElementById('search-trending-carousel');
+  if (!carousel) return;
   const items = await fetchTrendingMusic();
-  const box = document.getElementById('trending-results');
-  if (!box) return; // usuario trocou de view enquanto carregava
+  carousel.replaceChildren();
   if (!items.length) {
-    box.innerHTML = '<p class="yt-search-status">Tendências indisponíveis no momento. Tente novamente mais tarde.</p>';
+    const p = document.createElement('p');
+    p.className = 'yt-search-status';
+    p.textContent = 'Tendências indisponíveis no momento. Tente novamente mais tarde.';
+    carousel.appendChild(p);
     return;
   }
-  // Reusa as linhas da busca: numeracao, reproducoes, adicionar/salvar,
-  // menu "..." no mobile e clique para tocar (fila = lista de tendencias)
-  renderYtSearchResults(box, items);
+  // Cria cards de album para cada item (mesmo estilo dos cards da Home)
+  items.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'album-card';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'album-cover-wrap';
+    const img = document.createElement('img');
+    img.src = 'https://i.ytimg.com/vi/' + r.videoId + '/mqdefault.jpg';
+    img.alt = '';
+    img.loading = 'lazy';
+    wrap.appendChild(img);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'album-overlay';
+    overlay.innerHTML = '<button class="album-play-btn"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>';
+    wrap.appendChild(overlay);
+
+    const info = document.createElement('div');
+    info.className = 'album-info';
+    const title = document.createElement('div');
+    title.className = 'album-title';
+    title.textContent = r.title;
+    const artist = document.createElement('div');
+    artist.className = 'album-artist';
+    artist.textContent = (r.author || '') + (r.views ? ' \u00B7 ' + fmtViews(r.views) : '');
+    info.appendChild(title);
+    info.appendChild(artist);
+
+    card.appendChild(wrap);
+    card.appendChild(info);
+
+    overlay.querySelector('.album-play-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      playYouTubeResult(r, items);
+    });
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.album-play-btn')) return;
+      playYouTubeResult(r, items);
+    });
+
+    carousel.appendChild(card);
+  });
+  attachCarouselArrows('search-trending');
 }
 
 async function performSearch(raw) {
