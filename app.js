@@ -3091,7 +3091,7 @@ function renderSearch() {
         <!-- Tendências como carrossel -->
         <div id="search-trending" style="margin-top:32px">
           <h3 class="section-title" style="margin-bottom:4px">Tendências</h3>
-          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">O mais visto no YouTube baseado nos seus gostos.</p>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">Principais tendências para você.</p>
           ${buildCarousel('search-trending', 'search-trending-carousel')}
           <div id="trending-results" style="display:none"></div>
         </div>
