@@ -2677,9 +2677,160 @@ const Takeout = (function () {
     showToast('Takeout gerado: seus dados foram baixados em .json');
   }
 
-  // Restaura um arquivo de takeout: grava as chaves no localStorage
-  // e recarrega a pagina para que todos os modulos re-hidratem o
-  // estado pelos caminhos normais de boot (sem tocar na logica).
+  // ---------- Mesclagem aditiva por chave ----------
+  // A importacao NUNCA sobrescreve o que ja existe no dispositivo:
+  // os dados do arquivo sao SOMADOS aos locais, respeitando o formato
+  // e os limites que cada modulo ja usa. Regra geral:
+  //   - chave ausente localmente  -> copia o valor importado;
+  //   - chave existente + merger  -> uniao/soma especifica do tipo;
+  //   - chave existente sem merger -> mantem o valor local intacto.
+  function parseJson(raw) {
+    try { return JSON.parse(raw); } catch (_) { return undefined; }
+  }
+  function asArray(raw) {
+    const v = parseJson(raw);
+    return Array.isArray(v) ? v : null;
+  }
+  function asObject(raw) {
+    const v = parseJson(raw);
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+  }
+
+  // Uniao de arrays: itens locais primeiro, importados inexistentes depois.
+  // keyFn define a identidade de cada item; cap limita o total (0 = sem limite).
+  function unionArrays(localRaw, importedRaw, keyFn, cap) {
+    const loc = asArray(localRaw), imp = asArray(importedRaw);
+    if (!loc || !imp) return null; // formato inesperado -> mantem o local
+    const seen = new Set(loc.map(keyFn));
+    const out = loc.slice();
+    let added = 0;
+    imp.forEach(it => {
+      const k = keyFn(it);
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(it);
+      added++;
+    });
+    if (!added) return null;
+    return JSON.stringify(cap ? out.slice(0, cap) : out);
+  }
+
+  // Objeto: adiciona apenas as chaves que faltam (o local sempre vence).
+  function mergeObjectAddMissing(localRaw, importedRaw) {
+    const loc = asObject(localRaw), imp = asObject(importedRaw);
+    if (!loc || !imp) return null;
+    let added = 0;
+    Object.keys(imp).forEach(k => {
+      if (!(k in loc)) { loc[k] = imp[k]; added++; }
+    });
+    return added ? JSON.stringify(loc) : null;
+  }
+
+  // Playlists do usuario: playlists novas entram; nas de mesmo ID as
+  // faixas que faltam sao acrescentadas ao final (dedupe pela mesma
+  // chave 'l:<trackId>' / 'y:<videoId>' usada pelo UserPlaylists).
+  function itemKeyOf(it) {
+    return it && it.type === 'local' ? 'l:' + it.trackId : 'y:' + (it && it.videoId);
+  }
+  function mergeUserPlaylists(localRaw, importedRaw) {
+    const loc = asArray(localRaw), imp = asArray(importedRaw);
+    if (!loc || !imp) return null;
+    const byId = new Map(loc.map(p => [p && p.id, p]));
+    let changed = false;
+    imp.forEach(p => {
+      if (!p || !p.name || !Array.isArray(p.items)) return;
+      const existing = byId.get(p.id);
+      if (!existing) {
+        loc.push({
+          id: p.id || ('u' + Math.random().toString(36).slice(2)),
+          name: String(p.name).slice(0, 60),
+          createdAt: p.createdAt || Date.now(),
+          items: p.items.filter(Boolean),
+        });
+        changed = true;
+        return;
+      }
+      const keys = new Set((existing.items || []).map(itemKeyOf));
+      p.items.forEach(it => {
+        if (!it) return;
+        const k = itemKeyOf(it);
+        if (keys.has(k)) return;
+        keys.add(k);
+        existing.items.push(it);
+        changed = true;
+      });
+    });
+    return changed ? JSON.stringify(loc) : null;
+  }
+
+  // Historico de reproducao: uniao por (trackId, instante), ordenado do
+  // mais recente para o mais antigo, com o mesmo teto de 100 eventos.
+  function mergeHistory(localRaw, importedRaw) {
+    const merged = unionArrays(localRaw, importedRaw,
+      h => (h && h.trackId) + '|' + (h && h.at), 0);
+    if (merged === null) return null;
+    const arr = JSON.parse(merged);
+    arr.sort((a, b) => (b.at || 0) - (a.at || 0));
+    return JSON.stringify(arr.slice(0, 100));
+  }
+
+  // Contagem de reproducoes: as reproducoes dos dois dispositivos sao
+  // SOMADAS por faixa; metadados locais vencem, faltantes vem do arquivo.
+  // Poda com o mesmo criterio/limite (600) do modulo PlayStats.
+  function mergePlayStats(localRaw, importedRaw) {
+    const loc = asObject(localRaw), imp = asObject(importedRaw);
+    if (!loc || !imp) return null;
+    let changed = false;
+    Object.entries(imp).forEach(([id, e]) => {
+      if (!e || typeof e !== 'object') return;
+      const cur = loc[id];
+      if (!cur) { loc[id] = e; changed = true; return; }
+      loc[id] = {
+        plays: (cur.plays || 0) + (e.plays || 0),
+        title: cur.title || e.title || '',
+        artist: cur.artist || e.artist || '',
+        videoId: cur.videoId || e.videoId || '',
+        last: Math.max(cur.last || 0, e.last || 0),
+      };
+      changed = true;
+    });
+    if (!changed) return null;
+    const keys = Object.keys(loc);
+    if (keys.length > 600) {
+      keys.sort((a, b) => (loc[a].plays - loc[b].plays) || (loc[a].last - loc[b].last));
+      keys.slice(0, keys.length - 600).forEach(k => delete loc[k]);
+    }
+    return JSON.stringify(loc);
+  }
+
+  // Contadores simples: soma dos dois lados.
+  function sumCounter(localRaw, importedRaw) {
+    const a = parseInt(localRaw, 10), b = parseInt(importedRaw, 10);
+    if (isNaN(a) || isNaN(b) || b <= 0) return null;
+    return String(a + b);
+  }
+
+  // Estrategia de mesclagem por chave (chaves fora desta lista que ja
+  // existirem localmente sao simplesmente mantidas — nunca sobrescritas).
+  const MERGERS = {
+    'vibefm_user_playlists': mergeUserPlaylists,
+    'vibefm_liked': (l, i) => unionArrays(l, i, x => String(x), 0),
+    'vibefm_liked_meta': mergeObjectAddMissing,
+    'vibefm_history': mergeHistory,
+    'vibefm_tastes': (l, i) => unionArrays(l, i, x => String(x).trim().toLowerCase(), 0),
+    'vibefm_play_stats': mergePlayStats,
+    'vibefm_gallery': (l, i) => unionArrays(l, i, it => ((it && it.id) || '') + '|' + ((it && it.list) || ''), 60),
+    'vibefm_gallery_pinned': (l, i) => unionArrays(l, i, x => String(x), 0),
+    'vibefm_gallery_home_hidden': (l, i) => unionArrays(l, i, x => String(x), 0),
+    'minstream_search_history': (l, i) => unionArrays(l, i, x => String(x).toLowerCase(), 5),
+    'vibefm_adshield_stats': sumCounter,
+    'vibefm_profile': mergeObjectAddMissing,
+  };
+
+  // Restaura um arquivo de takeout de forma ADITIVA: soma os dados do
+  // arquivo aos ja existentes (sem sobrescrever nada) e recarrega a
+  // pagina para que todos os modulos re-hidratem o estado pelos
+  // caminhos normais de boot (sem tocar na logica).
   function restore(file, onFail) {
     const reader = new FileReader();
     reader.onload = () => {
@@ -2691,12 +2842,35 @@ const Takeout = (function () {
         const keys = Object.keys(data).filter(k =>
           typeof data[k] === 'string' && PREFIXES.some(p => k.startsWith(p)));
         if (!keys.length) throw new Error('vazio');
-        let applied = 0;
+        let added = 0, mergedCount = 0, kept = 0;
         keys.forEach(k => {
-          try { localStorage.setItem(k, data[k]); applied++; } catch (_) {}
+          let localRaw = null;
+          try { localRaw = localStorage.getItem(k); } catch (_) {}
+          try {
+            if (localRaw === null) {
+              // Nao existe aqui: entra como novo
+              localStorage.setItem(k, data[k]);
+              added++;
+            } else if (MERGERS[k]) {
+              // Existe: soma/uniao especifica do tipo (local nunca e perdido)
+              const merged = MERGERS[k](localRaw, data[k]);
+              if (merged !== null && merged !== localRaw) {
+                localStorage.setItem(k, merged);
+                mergedCount++;
+              } else {
+                kept++;
+              }
+            } else {
+              // Existe e nao ha estrategia: mantem o local intacto
+              kept++;
+            }
+          } catch (_) { kept++; }
         });
-        if (!applied) throw new Error('vazio');
-        showToast(applied + ' registro(s) restaurado(s). Recarregando…');
+        if (!added && !mergedCount) {
+          showToast('Nada novo para adicionar: seus dados já contêm tudo do arquivo');
+          return;
+        }
+        showToast('Dados somados aos existentes (' + (added + mergedCount) + ' registro(s) atualizados). Recarregando…');
         setTimeout(() => location.reload(), 900);
       } catch (_) {
         showToast('Arquivo de takeout inválido');
@@ -3066,7 +3240,7 @@ function renderSaved() {
     <div class="section">
       ${backButton()}
       <h2 class="section-title" style="margin-bottom:6px">Links Salvos</h2>
-      <p style="font-size:12px;color:var(--text-muted);margin-bottom:20px">Vídeos e playlists do YouTube guardados para ouvir quando quiser. Fixe os favoritos para mantê-los no topo.</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:20px">Vídeos e playlists guardados para ouvir quando quiser. Fixe os favoritos para mantê-los no topo.</p>
       ${items.length ? `<div class="album-grid" id="gallery-grid"></div>` : `
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>
@@ -3722,7 +3896,7 @@ function renderSearch() {
         ${buildCarousel('search-genres', 'search-genres-carousel')}
         <div id="search-trending" style="margin-top:32px">
           <h3 class="section-title" style="margin-bottom:4px">Tendências</h3>
-          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">O mais reproduzido no YouTube dentro dos seus gostos.</p>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">O mais reproduzido dentro dos seus gostos.</p>
           ${buildCarousel('search-trending', 'search-trending-carousel')}
         </div>
       </div>
@@ -4137,8 +4311,8 @@ function renderTilesSection(container, query) {
   }
 
   const subtitleText = query
-    ? 'Vídeos curtos do YouTube relacionados a "' + escapeHtml(query) + '"'
-    : 'Vídeos curtos do YouTube baseados nos seus gostos';
+    ? 'Vídeos curtos relacionados a "' + escapeHtml(query) + '"'
+    : 'Vídeos curtos baseados nos seus gostos.';
 
   section.innerHTML = `
     <div class="tiles-header">
@@ -4438,7 +4612,7 @@ function renderProfile() {
           <button class="pl-action-btn" id="takeout-import">Importar takeout</button>
         </div>
       </div>
-      <p style="font-size:10.5px;color:var(--text-muted);margin-top:10px">Ao importar, os dados do arquivo substituem os registros de mesmo nome neste navegador e a página é recarregada.</p>
+      <p style="font-size:10.5px;color:var(--text-muted);margin-top:10px">Ao importar, os dados do arquivo são <strong>somados</strong> aos que já existem neste navegador — playlists, curtidas, gostos e contagens são unidos, nada é sobrescrito — e a página é recarregada.</p>
     </div>`;
 
   // ---------- Icones e resumos dos cabecalhos ----------

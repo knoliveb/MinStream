@@ -78,7 +78,13 @@ Depois acesse `http://localhost:8080`.
   - **Gêneros que você mais ouve**: barras proporcionais ao peso de cada gênero no perfil de gosto.
 - **Seção Configurações**:
   - **AdShield**: filtro de conteúdo patrocinado + player em modo de privacidade.
-  - **Takeout (portabilidade de dados)**: baixa um arquivo `.json` com **todos** os dados do usuário salvos no `localStorage` (playlists, curtidas, links salvos, gostos, histórico, estatísticas, preferências e caches — todas as chaves `vibefm_*` e `minstream_*`). O mesmo arquivo pode ser **importado** em outro dispositivo: as chaves são gravadas de volta no `localStorage` e a página é recarregada para que o app re-hidrate o estado pelos caminhos normais de boot.
+  - **Takeout (portabilidade de dados)**: baixa um arquivo `.json` com **todos** os dados do usuário salvos no `localStorage` (playlists, curtidas, links salvos, gostos, histórico, estatísticas, preferências e caches — todas as chaves `vibefm_*` e `minstream_*`). O mesmo arquivo pode ser **importado** em outro dispositivo, e a importação é **aditiva**: nada do que já existe é sobrescrito — os dados do arquivo são **somados** aos locais, respeitando o formato e os limites de cada módulo:
+    - **Playlists**: playlists novas entram; nas de mesmo ID, as faixas que faltam são acrescentadas (dedupe pela mesma chave `l:`/`y:` do `UserPlaylists`), preservando nome e ordem locais.
+    - **Curtidas, links salvos, gostos, buscas recentes, fixados/ocultos**: união sem duplicados (gostos e buscas deduplicam sem diferenciar maiúsculas; links pela chave `id|list`, com os mesmos tetos: 60 links, 5 buscas).
+    - **Histórico**: união por (faixa, instante), ordenado do mais recente para o mais antigo, teto de 100.
+    - **Contagem de reproduções (`PlayStats`)**: as reproduções dos dois dispositivos são **somadas** por faixa (metadados locais vencem, `last` = mais recente), com a mesma poda de 600 entradas; o contador do AdShield também é somado.
+    - **Preferências escalares** (nome do perfil, AdShield on/off, modo do player, última faixa): o valor local é preservado; o importado só entra se a chave não existir.
+    - Reimportar o mesmo arquivo não duplica nada nos dados estruturais (apenas os contadores somam de novo, por serem somas). Após a importação, a página é recarregada para o app re-hidratar o estado pelos caminhos normais de boot.
 - **AdShield**: filtra conteúdo patrocinado das buscas/recomendações e usa o player em modo de privacidade.
 
 ### Mobile (≤768px)
@@ -102,7 +108,7 @@ Depois acesse `http://localhost:8080`.
 | `minstream_last_track` | Última faixa tocada (retomada) |
 | `vibefm_profile` | Personalização do perfil (nome de exibição) |
 
-O **Takeout** (Perfil) exporta/importa todas as chaves acima (prefixos `vibefm_` e `minstream_`) em um único arquivo `.json`, para migrar os dados entre dispositivos.
+O **Takeout** (Perfil) exporta todas as chaves acima (prefixos `vibefm_` e `minstream_`) em um único arquivo `.json`; a importação em outro dispositivo é **aditiva** — soma os dados aos existentes, sem sobrescrever nada.
 
 **Atualização a cada recarga**: sempre que a página é atualizada (F5), os caches persistentes de conteúdo dinâmico (Novidades, Tendências, playlists por gosto) são invalidados no boot — tudo é rebuscado com dados frescos. Dentro da sessão os caches continuam valendo, para não sobrecarregar as instâncias públicas.
 
