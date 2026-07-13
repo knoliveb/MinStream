@@ -366,7 +366,7 @@ const Reco = (function () {
     wrap.className = 'album-cover-wrap';
     if (p.thumbnail) {
       const img = document.createElement('img');
-      img.src = p.thumbnail; img.alt = ''; img.loading = 'lazy';
+      img.src = p.thumbnail; img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
       img.onerror = function () { this.remove(); };
       wrap.appendChild(img);
     } else {
@@ -453,7 +453,7 @@ const Reco = (function () {
     wrap.className = 'album-cover-wrap';
     if (cfg.cover) {
       const img = document.createElement('img');
-      img.src = cfg.cover; img.alt = ''; img.loading = 'lazy';
+      img.src = cfg.cover; img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
       wrap.appendChild(img);
     } else {
       const ph = document.createElement('div');
@@ -549,7 +549,7 @@ const Reco = (function () {
       card.className = 'exp-related-card';
       const img = document.createElement('img');
       img.src = 'https://i.ytimg.com/vi/' + it.videoId + '/mqdefault.jpg';
-      img.alt = ''; img.loading = 'lazy';
+      img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
       const label = document.createElement('div');
       label.className = 'exp-related-label';
       label.textContent = it.title;

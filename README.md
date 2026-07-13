@@ -37,19 +37,25 @@ Depois acesse `http://localhost:8080`.
 - VU meter animado e "videoclipes relacionados" no modo expandido.
 - Atalhos de teclado: `Espaço`, `Shift+←/→`, `M`, `S`, `R`, `L`, `T`, `F`, `Q`, `?`.
 
+### Perfil do artista
+- Ao pesquisar por um artista, um cartão **"Artista — Ver perfil"** aparece acima dos resultados quando a pesquisa corresponde a um canal do YouTube; o nome do artista em qualquer linha de resultado também é clicável.
+- A página de perfil reúne o conteúdo do canal do artista no YouTube: avatar, banner (quando disponível), inscritos, descrição, botão **Tocar tudo** e a lista de vídeos do canal, ranqueada do mais reproduzido para o menos (as APIs públicas retornam o lote mais recente do canal, ~30 vídeos).
+- **Estrutura pré-existente**: a página é criada uma única vez (template persistente com referências diretas aos campos) e reaproveitada em todas as visitas — abrir um artista apenas preenche os campos. Ela aparece instantaneamente com o nome já preenchido e um skeleton (avatar e linhas com shimmer) enquanto os dados chegam; os dois fetches de resolução (vídeos e canais) correm em paralelo e a busca do conteúdo do canal tem prazo total de 8s antes de cair no fallback.
+- **Resiliência**: a montagem tenta três caminhos — busca de canais → conteúdo do canal; ID do canal extraído dos próprios resultados de vídeo (`uploaderUrl`/`authorId`); e, se os endpoints de canal estiverem fora, um fallback garantido monta o perfil com os vídeos do artista vindos da busca comum (com aviso na página). Falhas não ficam em cache, então uma nova visita tenta o canal completo de novo.
+
 ### Busca
 - Busca por texto (Piped/Invidious, com fallback entre instâncias) e por URL do YouTube (vídeo ou playlist), com pré-visualização e botão **Salvar**.
 - Histórico de pesquisas recentes.
-- Seção **Explorar seus Gostos**: cards de gênero (com degradê cinza-escuro → verde) que disparam a busca.
-- Seção **Tendências**: as músicas em alta no YouTube nas últimas 24 horas (trending de música via Invidious, com fallback para o trending do Piped), ordenadas da mais reproduzida para a menos, com contagem de reproduções, cache de 30 min e as mesmas ações por faixa (tocar, adicionar, salvar, menu "..." no mobile).
+- Seção **Explorar seus Gostos**: carrossel horizontal de cards de gênero (degradê cinza-escuro → verde) que disparam a busca.
+- Seção **Tendências**: carrossel de cards (capa 16:9, play no hover, título e "artista · reproduções", artista clicável para o perfil). O conteúdo vem em duas camadas: **pessoal** (primária) — o mais visto no YouTube dentro dos seus gostos, combinando buscas derivadas dos gêneros (Tastes) e dos artistas mais tocados (PlayStats), deduplicadas por vídeo e ordenadas por views, com teto de 12 buscas em lotes de 3; e **geral** (fallback) — o trending de música das últimas 24 horas, quando você ainda não tem gostos ou as buscas pessoais não retornam nada. Cache de 30 min.
 
 ### Playlists e biblioteca
-- **Playlists do usuário**: criar, excluir, adicionar/remover faixas, exportar/importar JSON.
+- **Playlists do usuário**: criar, excluir, adicionar/remover faixas, exportar/importar JSON — as ações **Nova**, **Exportar** e **Importar** ficam no menu **"..."** ao lado de "Suas Playlists" no Início.
   - Faixas duplicadas (mesmo ID) são bloqueadas em qualquer caminho — adição manual, salvamento de mixes pelo sistema e importação de JSON; dados legados são saneados automaticamente ao carregar.
   - Ordenação padrão da faixa mais recente para a mais antiga (novas faixas entram no topo).
   - Reordenação por **drag and drop** pela alça de arrastar (funciona com mouse e toque), tanto na Home quanto na Biblioteca; a ordem é persistida.
 - **Curtidas**: playlist virtual espelhando os likes (adicionar = curtir).
-- **Recentes**: histórico das últimas faixas tocadas.
+- **Recentes**: histórico completo de reprodução — todas as reproduções guardadas (até 100), incluindo faixas do YouTube recriadas a partir dos metadados após um reload.
 - **Links Salvos**: galeria de vídeos/playlists do YouTube salvos, com fixar no topo e ocultar da Home.
 
 ### Recomendações
@@ -86,7 +92,17 @@ Depois acesse `http://localhost:8080`.
 | `vibefm_news_cache` | Cache de "Novidades" |
 | `minstream_last_track` | Última faixa tocada (retomada) |
 
-O botão **Exportar** na Home gera um backup das playlists em JSON; **Importar** restaura (playlists com IDs já existentes são ignoradas e faixas duplicadas dentro de cada playlist são removidas).
+**Atualização a cada recarga**: sempre que a página é atualizada (F5), os caches persistentes de conteúdo dinâmico (Novidades, Tendências, playlists por gosto) são invalidados no boot — tudo é rebuscado com dados frescos. Dentro da sessão os caches continuam valendo, para não sobrecarregar as instâncias públicas.
+
+O botão **Exportar** (no menu "..." da Home) gera um backup das playlists em JSON; **Importar** restaura (playlists com IDs já existentes são ignoradas e faixas duplicadas dentro de cada playlist são removidas).
+
+## Performance
+- **Render seletivo**: o `updatePlayerUI` (chamado 2×/s pelo poll de progresso) usa dirty-checking — só escreve no DOM o que mudou; a varredura das linhas de faixa (equalizer) roda apenas na troca de faixa ou play/pause.
+- **Listas virtualizadas pelo navegador**: linhas de faixa, itens de fila e cards usam `content-visibility: auto`, pulando layout/render do que está fora da tela (relevante nos 100 itens de Recentes).
+- **Canvases econômicos**: VU meter a ~30fps e partículas de fundo a ~25fps com movimento baseado em tempo, menos partículas (36 desktop / 22 mobile), distância ao quadrado no laço O(n²) e pausa total com a aba oculta.
+- **Animações no compositor**: `transition: all` foi substituído por listas explícitas de propriedades baratas; o pulso do botão play anima `transform/opacity` em pseudo-elemento (sem repaint de `box-shadow`).
+- **Mobile**: blurs da topbar/tab bar reduzidos (12–14px) — mesmo visual, fração do custo por frame no scroll; imagens com `loading="lazy"` e `decoding="async"`.
+- **Acessibilidade**: `prefers-reduced-motion` desliga partículas e reduz animações/transições ao essencial.
 
 ## Notas técnicas
 

@@ -861,7 +861,7 @@ async function loadRelatedVideos() {
     const img = document.createElement('img');
     img.src = 'https://i.ytimg.com/vi/' + r.videoId + '/mqdefault.jpg';
     img.alt = '';
-    img.loading = 'lazy';
+    img.loading = 'lazy'; img.decoding = 'async';
     const label = document.createElement('div');
     label.className = 'exp-related-label';
     label.textContent = r.title;
@@ -1066,10 +1066,15 @@ function syncTrackFromVideoData() {
     if (vd && vd.video_id && vd.video_id !== lastSyncedVideoId) {
       lastSyncedVideoId = vd.video_id;
       state.currentTrack.videoId = vd.video_id;
+      // Atualiza o ID para que updatePlayerUI detecte mudanca de track
+      // e o botao de curtir opere sobre o video correto
+      state.currentTrack.id = 'yt_' + vd.video_id;
       if (vd.title) state.currentTrack.title = vd.title;
       if (vd.author) state.currentTrack.artist = vd.author;
       state.currentTrack.cover = 'https://i.ytimg.com/vi/' + vd.video_id + '/hqdefault.jpg';
+      materializeYtTrack(vd.video_id, state.currentTrack.title, state.currentTrack.artist, 0);
       updatePlayerUI();
+      saveLastTrack();
     }
   } catch (_) {}
 }
@@ -1611,6 +1616,13 @@ async function fetchWithTimeout(url, ms) {
   }
 }
 
+// Extrai o ID de canal (UC...) de uma URL de uploader do Piped
+function channelIdFromUrl(u) {
+  if (!u) return '';
+  const m = /\/channel\/(UC[A-Za-z0-9_-]{10,})/.exec(u);
+  return m ? m[1] : '';
+}
+
 function normalizePiped(items) {
   return (items || [])
     .filter(it => it && it.url && it.url.includes('watch?v='))
@@ -1618,6 +1630,7 @@ function normalizePiped(items) {
       videoId: extractVideoId(it.url),
       title: it.title || '',
       author: it.uploaderName || '',
+      channelId: channelIdFromUrl(it.uploaderUrl),
       duration: it.duration || 0,
       views: (typeof it.views === 'number' && it.views >= 0) ? it.views : 0,
       published: (typeof it.uploaded === 'number' && it.uploaded > 0) ? it.uploaded : null,
@@ -1633,6 +1646,7 @@ function normalizeInvidious(items) {
       videoId: it.videoId,
       title: it.title || '',
       author: it.author || '',
+      channelId: it.authorId || '',
       duration: it.lengthSeconds || 0,
       views: (typeof it.viewCount === 'number' && it.viewCount >= 0) ? it.viewCount : 0,
       published: (typeof it.published === 'number' && it.published > 0) ? it.published * 1000 : null,
@@ -1864,52 +1878,365 @@ async function searchYouTubePlaylists(query) {
 }
 
 // ============================================
-// TENDENCIAS — CONTEUDO MAIS VISTO BASEADO NOS GOSTOS DO USUARIO
-// Busca por queries derivadas dos gostos do usuario (Tastes), combinando
-// resultados de multiplas buscas e ordenando por visualizacoes (mais vistos primeiro).
-// Assim as "Tendencias" refletem o que esta em alta DENTRO dos gostos do usuario.
+// PERFIL DO ARTISTA
+// Ao pesquisar um artista, o app monta uma pagina de perfil que reune
+// o conteudo do canal dele no YouTube: avatar/banner, inscritos,
+// descricao e os videos do canal (via Piped/Invidious), ranqueados
+// pelo sistema de acuracia (mais reproduzidos primeiro).
+// ============================================
+const ytChannelSearchCache = new Map();
+const artistProfileCache = new Map(); // nome (lower) -> perfil (memoria: zera no F5)
+let currentArtistProfile = null;
+
+function fmtCompact(n) {
+  if (!n || n <= 0) return '';
+  try {
+    return new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+  } catch (_) { return String(n); }
+}
+
+function normalizePipedChannels(items) {
+  return (items || [])
+    .filter(it => it && it.url && it.url.includes('/channel/'))
+    .map(it => ({
+      channelId: (it.url.split('/channel/')[1] || '').split(/[/?#]/)[0],
+      name: it.name || '',
+      avatar: it.thumbnail || '',
+      subs: (typeof it.subscribers === 'number' && it.subscribers > 0) ? it.subscribers : 0,
+      description: it.description || '',
+    }))
+    .filter(c => /^UC[A-Za-z0-9_-]{10,}$/.test(c.channelId));
+}
+
+function normalizeInvidiousChannels(items) {
+  return (items || [])
+    .filter(it => it && it.type === 'channel' && it.authorId)
+    .map(it => ({
+      channelId: it.authorId,
+      name: it.author || '',
+      avatar: (it.authorThumbnails && it.authorThumbnails.length)
+        ? it.authorThumbnails[it.authorThumbnails.length - 1].url : '',
+      subs: (typeof it.subCount === 'number' && it.subCount > 0) ? it.subCount : 0,
+      description: it.description || '',
+    }));
+}
+
+async function searchYouTubeChannels(query) {
+  const q = query.trim();
+  if (!q) return [];
+  const key = q.toLowerCase();
+  if (ytChannelSearchCache.has(key)) return ytChannelSearchCache.get(key);
+
+  for (const src of YT_SEARCH_SOURCES) {
+    try {
+      const url = src.kind === 'piped'
+        ? src.base + '/search?q=' + encodeURIComponent(q) + '&filter=channels'
+        : src.base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=channel';
+      const res = await fetchWithTimeout(url, 4500);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const items = src.kind === 'piped'
+        ? normalizePipedChannels(data && data.items)
+        : normalizeInvidiousChannels(data);
+      if (items.length) {
+        const top = items.slice(0, 5);
+        ytChannelSearchCache.set(key, top);
+        return top;
+      }
+    } catch (_) { /* tenta a proxima instancia */ }
+  }
+  // Nao grava cache vazio: as instancias publicas oscilam, entao uma
+  // proxima tentativa (ex.: novo clique) pode funcionar.
+  return [];
+}
+
+// Busca os videos (e metadados extras) do canal
+async function fetchChannelContent(channel) {
+  for (const src of YT_SEARCH_SOURCES) {
+    try {
+      if (src.kind === 'piped') {
+        const res = await fetchWithTimeout(src.base + '/channel/' + channel.channelId, 5000);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const vids = AdShield.filter(normalizePiped(data.relatedStreams || []));
+        if (!vids.length) continue;
+        return {
+          ...channel,
+          name: data.name || channel.name,
+          avatar: data.avatarUrl || channel.avatar,
+          banner: data.bannerUrl || '',
+          subs: (typeof data.subscriberCount === 'number' && data.subscriberCount > 0) ? data.subscriberCount : channel.subs,
+          description: data.description || channel.description,
+          videos: rankByPlays(vids).slice(0, 30), // acuracia: mais reproduzidos primeiro
+        };
+      } else {
+        const res = await fetchWithTimeout(src.base + '/api/v1/channels/' + channel.channelId + '/videos', 5000);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const arr = (Array.isArray(data) ? data : (data && data.videos) || [])
+          .map(it => ({ ...it, type: it.type || 'video' }));
+        const vids = AdShield.filter(normalizeInvidious(arr));
+        if (!vids.length) continue;
+        return { ...channel, banner: '', videos: rankByPlays(vids).slice(0, 30) };
+      }
+    } catch (_) { /* tenta a proxima instancia */ }
+  }
+  return null;
+}
+
+// Resolve o melhor canal para um nome de artista e busca seu conteudo.
+// Resiliente por construcao: os endpoints de canal das instancias
+// publicas falham com frequencia MESMO quando a busca de videos
+// funciona. Por isso ha tres caminhos, do mais rico ao garantido:
+//   1. busca de canais -> conteudo do canal;
+//   2. ID do canal extraido dos proprios resultados de video
+//      (uploaderUrl/authorId) -> conteudo do canal;
+//   3. fallback garantido: perfil montado com os videos do artista
+//      vindos da busca comum (que comprovadamente funciona no app).
+async function fetchArtistProfile(name) {
+  const qn = name.trim().toLowerCase();
+  const matches = (n) => {
+    const x = (n || '').trim().toLowerCase();
+    return !!x && (x === qn || x.includes(qn) || qn.includes(x));
+  };
+
+  // Os dois caminhos de resolucao correm EM PARALELO (era sequencial:
+  // cada um podia levar segundos; juntos, o tempo cai pela metade)
+  let searchResults = [];
+  let channels = [];
+  try {
+    [searchResults, channels] = await Promise.all([
+      searchYouTube(name).then(r => r || []).catch(() => []),
+      searchYouTubeChannels(name).catch(() => []),
+    ]);
+  } catch (_) {}
+  const byAuthor = searchResults.filter(r => matches(r.author));
+  const authorVideos = byAuthor.length >= 3 ? byAuthor : searchResults;
+
+  // Candidatos a canal: (a) busca de canais...
+  const candidates = [];
+  channels.filter(c => matches(c.name)).forEach(c => candidates.push(c));
+  if (!candidates.length && channels.length) candidates.push(channels[0]);
+
+  // ...(b) e o canal extraido dos proprios resultados de video
+  const vidWithChannel = byAuthor.find(r => r.channelId) || searchResults.find(r => r.channelId);
+  if (vidWithChannel && !candidates.some(c => c.channelId === vidWithChannel.channelId)) {
+    candidates.push({
+      channelId: vidWithChannel.channelId,
+      name: vidWithChannel.author,
+      avatar: '', subs: 0, description: '',
+    });
+  }
+
+  // Tenta o conteudo completo do canal para cada candidato, com um prazo
+  // total: se as instancias estiverem lentas, cai para o fallback em vez
+  // de acumular timeouts (era a principal causa da espera longa)
+  const deadline = Date.now() + 8000;
+  for (const ch of candidates.slice(0, 3)) {
+    if (!ch.channelId || Date.now() > deadline) continue;
+    try {
+      const full = await fetchChannelContent(ch);
+      if (full && (full.videos || []).length) return full;
+    } catch (_) { /* tenta o proximo candidato */ }
+  }
+
+  // Fallback garantido: monta o perfil com o que a busca encontrou
+  if (authorVideos.length) {
+    const best = candidates[0] || null;
+    return {
+      channelId: best ? best.channelId : '',
+      name: (best && matches(best.name)) ? best.name
+        : (byAuthor[0] ? byAuthor[0].author : name.trim()),
+      avatar: best ? best.avatar : '',
+      subs: best ? best.subs : 0,
+      description: best ? best.description : '',
+      videos: rankByPlays(authorVideos.slice()),
+      fromSearch: true, // indica que veio da busca, nao do canal
+    };
+  }
+  return null;
+}
+
+// Abre (e monta, se preciso) a pagina de perfil do artista
+// ============================================
+// PAGINA DO ARTISTA — ESTRUTURA PRE-EXISTENTE
+// A pagina e criada UMA unica vez (template persistente com referencias
+// diretas aos campos). Abrir um artista apenas: (1) anexa a estrutura ao
+// main e mostra o skeleton na hora — com o nome ja preenchido; (2) busca
+// os dados em paralelo; (3) preenche os campos. Nada de reconstruir/
+// re-parsear HTML a cada visita: so escrita de texto/atributos.
+// ============================================
+let artistPageEl = null;
+const artistRefs = {};
+
+function ensureArtistPage() {
+  if (artistPageEl) return artistPageEl;
+  artistPageEl = document.createElement('div');
+  artistPageEl.className = 'section artist-page';
+  artistPageEl.innerHTML = `
+    ${backButton('search')}
+    <div class="artist-hero" data-ref="hero">
+      <div class="artist-avatar-wrap" data-ref="avatarWrap">
+        <img class="artist-avatar" data-ref="avatar" alt="" decoding="async" style="display:none">
+      </div>
+      <div class="artist-hero-info">
+        <div class="artist-kicker">Perfil do artista</div>
+        <h2 class="artist-name" data-ref="name"></h2>
+        <div class="artist-meta" data-ref="meta"></div>
+        <p class="artist-desc" data-ref="desc" style="display:none"></p>
+        <button class="btn-play-main artist-play-all" data-ref="playAll" title="Tocar todo o conteúdo">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Tocar tudo
+        </button>
+      </div>
+    </div>
+    <h3 class="section-title" data-ref="listTitle" style="margin:26px 0 4px">Conteúdo do canal</h3>
+    <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 12px" data-ref="listNote"></p>
+    <div data-ref="videos"></div>
+  `;
+  artistPageEl.querySelectorAll('[data-ref]').forEach(el => { artistRefs[el.dataset.ref] = el; });
+  // Listeners permanentes (uma unica vez, nunca re-vinculados)
+  artistRefs.avatar.addEventListener('error', () => { artistRefs.avatar.style.display = 'none'; });
+  artistRefs.playAll.addEventListener('click', () => {
+    const v = currentArtistProfile && currentArtistProfile.videos;
+    if (v && v.length) playYouTubeResult(v[0], v);
+  });
+  return artistPageEl;
+}
+
+// Anexa a estrutura (se ainda nao estiver no main) e entra em modo skeleton
+function showArtistSkeleton(name) {
+  ensureArtistPage();
+  if (!artistPageEl.isConnected) main.replaceChildren(artistPageEl);
+  main.scrollTop = 0;
+  artistPageEl.classList.add('loading');
+  artistRefs.hero.style.backgroundImage = '';
+  artistRefs.avatar.style.display = 'none';
+  artistRefs.avatar.removeAttribute('src');
+  artistRefs.name.textContent = name;          // o nome ja e conhecido: aparece na hora
+  artistRefs.meta.textContent = 'Carregando canal\u2026';
+  artistRefs.desc.style.display = 'none';
+  artistRefs.desc.textContent = '';
+  artistRefs.playAll.disabled = true;
+  artistRefs.listTitle.textContent = 'Conteúdo do canal';
+  artistRefs.listNote.textContent = '';
+  // Linhas fantasma no lugar da lista (shimmer)
+  artistRefs.videos.innerHTML = '<div class="track-skel"></div>'.repeat(6);
+}
+
+async function openArtistProfile(name) {
+  const q = (name || '').trim();
+  if (!q) return;
+  state.prevView = state.view;
+  state.view = 'artist';
+  document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === 'search');
+  });
+
+  // Estrutura visivel imediatamente, com o nome preenchido
+  showArtistSkeleton(q);
+
+  let profile = artistProfileCache.get(q.toLowerCase());
+  if (!profile) {
+    profile = await fetchArtistProfile(q);
+    // So fixa em cache o perfil completo do canal; o perfil de fallback
+    // (montado da busca) fica fora para uma proxima visita tentar de novo
+    if (profile && !profile.fromSearch) artistProfileCache.set(q.toLowerCase(), profile);
+  }
+  if (state.view !== 'artist') return; // usuario navegou enquanto carregava
+
+  if (!profile || !(profile.videos || []).length) {
+    artistPageEl.classList.remove('loading');
+    artistRefs.meta.textContent = 'Canal indisponível no momento';
+    artistRefs.videos.innerHTML = '<div class="empty-state"><p>Não foi possível montar o perfil de "' + escapeHtml(q) + '" agora. Tente novamente mais tarde.</p></div>';
+    return;
+  }
+  currentArtistProfile = profile;
+  renderArtistView();
+}
+
+// Preenche os campos da estrutura pre-existente com o perfil atual
+function renderArtistView() {
+  const p = currentArtistProfile;
+  if (!p) { setView('search'); return; }
+  ensureArtistPage();
+  if (!artistPageEl.isConnected) { main.replaceChildren(artistPageEl); main.scrollTop = 0; }
+  artistPageEl.classList.remove('loading');
+
+  const videos = p.videos || [];
+
+  artistRefs.hero.style.backgroundImage = p.banner
+    ? "linear-gradient(rgba(10,10,10,0.55),rgba(10,10,10,0.94)),url('" + p.banner + "')"
+    : '';
+  if (p.avatar) {
+    artistRefs.avatar.src = p.avatar;
+    artistRefs.avatar.style.display = '';
+  } else {
+    artistRefs.avatar.style.display = 'none';
+  }
+  artistRefs.name.textContent = p.name;
+  artistRefs.meta.textContent = [
+    p.subs ? fmtCompact(p.subs) + ' inscritos' : null,
+    videos.length + (p.fromSearch ? ' faixas encontradas' : ' vídeos do canal'),
+  ].filter(Boolean).join(' \u00B7 ');
+  if (p.description) {
+    artistRefs.desc.textContent = p.description.slice(0, 280) + (p.description.length > 280 ? '\u2026' : '');
+    artistRefs.desc.style.display = '';
+  } else {
+    artistRefs.desc.style.display = 'none';
+  }
+  artistRefs.playAll.disabled = !videos.length;
+  artistRefs.listTitle.textContent = p.fromSearch ? 'Conteúdo do artista' : 'Conteúdo do canal';
+  artistRefs.listNote.textContent = p.fromSearch
+    ? 'O canal do artista está temporariamente inacessível; exibindo o conteúdo dele encontrado na busca, do mais reproduzido para o menos.'
+    : 'Do mais reproduzido para o menos (acurácia por reproduções).';
+  renderYtSearchResults(artistRefs.videos, videos);
+}
+
+// ============================================
+// TENDENCIAS — O MAIS VISTO DENTRO DOS GOSTOS DO USUARIO
+// Conceito: em vez de so o trending generico, as "Tendencias" refletem
+// o que esta em alta DENTRO dos gostos do usuario. Duas camadas:
+//   1. PESSOAL (primaria): queries derivadas dos gostos (Tastes) e dos
+//      artistas mais tocados (PlayStats), combinadas, deduplicadas por
+//      videoId (aparicoes em varias buscas corroboram) e ordenadas por
+//      views — o mais visto primeiro.
+//   2. GERAL (fallback): trending de musica das ultimas 24h dos
+//      endpoints publicos — quando o usuario ainda nao tem gostos ou as
+//      buscas pessoais nao retornam nada.
 // Cache de 30 min para acompanhar o dia sem martelar as instancias.
 // ============================================
 const TRENDING_CACHE_KEY = 'vibefm_trending_cache';
 const TRENDING_TTL = 30 * 60 * 1000; // 30 min
+const TRENDING_REGION = 'BR';
 
-async function fetchTrendingMusic() {
-  try {
-    const c = JSON.parse(localStorage.getItem(TRENDING_CACHE_KEY) || 'null');
-    if (c && Date.now() - c.at < TRENDING_TTL && Array.isArray(c.items) && c.items.length) {
-      return c.items;
-    }
-  } catch (_) {}
-
-  // Constroi queries a partir dos gostos do usuario
-  const tastes = Tastes.load();
+// Camada pessoal: o mais visto no YouTube dentro dos gostos do usuario
+async function fetchTasteTrending() {
   const year = new Date().getFullYear();
   const queries = [];
-  tastes.forEach(g => {
+  // Teto de queries: o conceito aplicado sem sobrecarregar as instancias
+  // (ate 4 gostos x 2 formas + 4 artistas mais tocados = max 12 buscas)
+  (typeof Tastes !== 'undefined' ? Tastes.load() : []).slice(0, 4).forEach(g => {
     queries.push(g + ' music ' + year);
     queries.push(g + ' hits ' + year);
-    queries.push('melhores ' + g + ' ' + year);
   });
-  // Tambem busca por artistas mais ouvidos do usuario
   if (typeof PlayStats !== 'undefined') {
-    PlayStats.top(5).forEach(e => {
+    PlayStats.top(4).forEach(e => {
       if (e.artist) queries.push(e.artist + ' ' + year);
     });
   }
-
   const uniq = [...new Set(queries.map(q => q.trim()).filter(Boolean))];
   if (!uniq.length) return [];
 
-  // Executa as buscas com concorrencia limitada (max 3 simultaneas)
+  // Buscas com concorrencia limitada (max 3 simultaneas)
   const allResults = [];
-  const concurrency = 3;
-  for (let i = 0; i < uniq.length; i += concurrency) {
-    const batch = uniq.slice(i, i + concurrency);
+  for (let i = 0; i < uniq.length; i += 3) {
+    const batch = uniq.slice(i, i + 3);
     const results = await Promise.all(batch.map(q => searchYouTube(q).catch(() => [])));
-    results.forEach(list => allResults.push(...list));
+    results.forEach(list => allResults.push(...(list || [])));
   }
 
-  // Deduplica por videoId e soma views
+  // Deduplica por videoId; aparicoes em varias buscas corroboram o item
   const byId = new Map();
   allResults.forEach(r => {
     if (!r.videoId) return;
@@ -1922,16 +2249,59 @@ async function fetchTrendingMusic() {
     }
   });
 
-  // Ordena por visualizacoes (mais vistos primeiro) e pega os top 16
-  const items = [...byId.values()]
-    .sort((a, b) => (b.views || 0) - (a.views || 0))
-    .slice(0, 16);
+  // Acuracia: mais vistos primeiro; top 16 para preencher o carrossel
+  return rankByPlays([...byId.values()]).slice(0, 16);
+}
 
-  if (items.length) {
-    try { localStorage.setItem(TRENDING_CACHE_KEY, JSON.stringify({ at: Date.now(), items })); } catch (_) {}
+async function fetchTrendingMusic() {
+  try {
+    const c = JSON.parse(localStorage.getItem(TRENDING_CACHE_KEY) || 'null');
+    if (c && Date.now() - c.at < TRENDING_TTL && Array.isArray(c.items) && c.items.length) {
+      return c.items;
+    }
+  } catch (_) {}
+
+  // 1) Camada pessoal (gostos + artistas mais tocados)
+  try {
+    const personal = await fetchTasteTrending();
+    if (personal.length) {
+      try { localStorage.setItem(TRENDING_CACHE_KEY, JSON.stringify({ at: Date.now(), items: personal })); } catch (_) {}
+      return personal;
+    }
+  } catch (_) { /* cai para a camada geral */ }
+
+  // 2) Camada geral: trending de musica das ultimas 24h.
+  // Invidious primeiro: tem a categoria "music" nativa no trending
+  const sources = [...YT_SEARCH_SOURCES]
+    .sort((a, b) => (a.kind === 'invidious' ? 0 : 1) - (b.kind === 'invidious' ? 0 : 1));
+
+  for (const src of sources) {
+    try {
+      const url = src.kind === 'piped'
+        ? src.base + '/trending?region=' + TRENDING_REGION
+        : src.base + '/api/v1/trending?type=music&region=' + TRENDING_REGION;
+      const res = await fetchWithTimeout(url, 4500);
+      if (!res.ok) continue;
+      const data = await res.json();
+      let raw;
+      if (src.kind === 'piped') {
+        // Trending geral: mantem apenas duracoes tipicas de musica (1–12 min)
+        const arr = Array.isArray(data) ? data : (data && data.items) || [];
+        raw = normalizePiped(arr).filter(it => it.duration >= 60 && it.duration <= 720);
+      } else {
+        // Algumas versoes do Invidious omitem "type" no trending
+        const arr = (Array.isArray(data) ? data : []).map(it => ({ ...it, type: it.type || 'video' }));
+        raw = normalizeInvidious(arr);
+      }
+      const items = AdShield.filter(raw);
+      if (items.length) {
+        const top = rankByPlays(items).slice(0, 16);
+        try { localStorage.setItem(TRENDING_CACHE_KEY, JSON.stringify({ at: Date.now(), items: top })); } catch (_) {}
+        return top;
+      }
+    } catch (_) { /* tenta a proxima instancia */ }
   }
-
-  return items;
+  return [];
 }
 
 // ============================================
@@ -2357,7 +2727,7 @@ function createGalleryCard(item, onChange, mode) {
     const img = document.createElement('img');
     img.src = 'https://i.ytimg.com/vi/' + item.id + '/mqdefault.jpg';
     img.alt = '';
-    img.loading = 'lazy';
+    img.loading = 'lazy'; img.decoding = 'async';
     coverWrap.appendChild(img);
   } else {
     const ph = document.createElement('div');
@@ -2523,6 +2893,7 @@ function setView(view) {
     case 'liked': renderLiked(); break;
     case 'recent': renderRecent(); break;
     case 'saved': renderSaved(); break;
+    case 'artist': currentArtistProfile ? renderArtistView() : renderSearch(); break;
   }
 }
 
@@ -2575,17 +2946,8 @@ function renderHome() {
       <div class="section-header pl-home-header">
         <h2 class="section-title">Suas Playlists</h2>
         <div class="pl-home-actions">
-          <button class="pl-action-btn" id="btn-new-playlist">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>
-            Nova
-          </button>
-          <button class="pl-action-btn" id="btn-export-pls" title="Baixar playlists como arquivo JSON">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke-linecap="round"/></svg>
-            Exportar
-          </button>
-          <button class="pl-action-btn" id="btn-import-pls" title="Importar playlists de um arquivo JSON">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke-linecap="round"/><polyline points="17 8 12 3 7 8" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="3" x2="12" y2="15" stroke-linecap="round"/></svg>
-            Importar
+          <button class="pl-action-btn" id="btn-pl-menu" title="Opções de playlists">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
           </button>
           <input type="file" id="import-pls-file" accept=".json,application/json" style="display:none">
         </div>
@@ -2692,23 +3054,40 @@ function renderHome() {
   });
   attachCarouselArrows('home-dyn-pl');
 
-  document.getElementById('btn-new-playlist').addEventListener('click', () => {
-    const name = prompt('Nome da nova playlist:');
-    if (name && name.trim()) {
-      UserPlaylists.create(name);
-      renderHome();
-      renderSidebarPlaylists();
-    }
-  });
-  document.getElementById('btn-export-pls').addEventListener('click', () => UserPlaylists.exportJson());
-  document.getElementById('btn-edit-tastes').addEventListener('click', () => setView('profile'));
+  // Menu "..." de "Suas Playlists": concentra Nova, Exportar e Importar
   const fileInput = document.getElementById('import-pls-file');
-  document.getElementById('btn-import-pls').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
     if (fileInput.files && fileInput.files[0]) {
       UserPlaylists.importJson(fileInput.files[0], () => { renderHome(); renderSidebarPlaylists(); });
     }
   });
+  document.getElementById('btn-pl-menu').addEventListener('click', () => {
+    openTrackMenu('Suas Playlists', [
+      {
+        label: 'Nova playlist',
+        icon: MENU_ICON_ADD,
+        onClick: () => {
+          const name = prompt('Nome da nova playlist:');
+          if (name && name.trim()) {
+            UserPlaylists.create(name);
+            renderHome();
+            renderSidebarPlaylists();
+          }
+        },
+      },
+      {
+        label: 'Exportar playlists (JSON)',
+        icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke-linecap="round"/></svg>',
+        onClick: () => UserPlaylists.exportJson(),
+      },
+      {
+        label: 'Importar playlists (JSON)',
+        icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke-linecap="round"/><polyline points="17 8 12 3 7 8" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="3" x2="12" y2="15" stroke-linecap="round"/></svg>',
+        onClick: () => fileInput.click(),
+      },
+    ]);
+  });
+  document.getElementById('btn-edit-tastes').addEventListener('click', () => setView('profile'));
 
   // Secao "Links Salvos" da Home (com fixar)
   renderHomeSaved();
@@ -2790,7 +3169,7 @@ function createPlaylistCard(cfg) {
     const img = document.createElement('img');
     img.src = cfg.cover;
     img.alt = '';
-    img.loading = 'lazy';
+    img.loading = 'lazy'; img.decoding = 'async';
     coverWrap.appendChild(img);
   } else {
     const ph = document.createElement('div');
@@ -3084,22 +3463,18 @@ function renderSearch() {
     <div class="section">
       <div id="search-results"></div>
       <div id="search-genres">
-        <!-- Explorar seus Gostos como carrossel -->
         <h3 class="section-title" style="margin-bottom:14px">Explorar seus Gostos</h3>
         ${buildCarousel('search-genres', 'search-genres-carousel')}
-
-        <!-- Tendências como carrossel -->
         <div id="search-trending" style="margin-top:32px">
           <h3 class="section-title" style="margin-bottom:4px">Tendências</h3>
-          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">Principais tendências para você.</p>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 14px">O mais reproduzido no YouTube dentro dos seus gostos.</p>
           ${buildCarousel('search-trending', 'search-trending-carousel')}
-          <div id="trending-results" style="display:none"></div>
         </div>
       </div>
     </div>
   `;
 
-  // Preenche o carrossel de gostos com cards de genero
+  // Cards de genero no carrossel (clique -> busca pelo gosto)
   const genresTrack = document.getElementById('search-genres-carousel');
   if (genresTrack) {
     Tastes.load().forEach(g => {
@@ -3124,11 +3499,14 @@ function renderSearch() {
   performSearch(globalSearchInput.value.trim());
 }
 
-// Preenche a secao "Tendencias" da pagina de busca (agora um carrossel)
+// Preenche a secao "Tendencias" da pagina de busca como um carrossel de
+// cards (mesmo estilo dos cards da Home): capa 16:9, play no hover,
+// titulo e "artista · reproducoes". Clique toca com a lista como fila.
 async function loadTrendingSection() {
-  const carousel = document.getElementById('search-trending-carousel');
-  if (!carousel) return;
+  if (!document.getElementById('search-trending-carousel')) return;
   const items = await fetchTrendingMusic();
+  const carousel = document.getElementById('search-trending-carousel');
+  if (!carousel) return; // usuario trocou de view enquanto carregava
   carousel.replaceChildren();
   if (!items.length) {
     const p = document.createElement('p');
@@ -3137,7 +3515,6 @@ async function loadTrendingSection() {
     carousel.appendChild(p);
     return;
   }
-  // Cria cards de album para cada item (mesmo estilo dos cards da Home)
   items.forEach(r => {
     const card = document.createElement('div');
     card.className = 'album-card';
@@ -3147,7 +3524,7 @@ async function loadTrendingSection() {
     const img = document.createElement('img');
     img.src = 'https://i.ytimg.com/vi/' + r.videoId + '/mqdefault.jpg';
     img.alt = '';
-    img.loading = 'lazy';
+    img.loading = 'lazy'; img.decoding = 'async';
     wrap.appendChild(img);
 
     const overlay = document.createElement('div');
@@ -3161,8 +3538,12 @@ async function loadTrendingSection() {
     title.className = 'album-title';
     title.textContent = r.title;
     const artist = document.createElement('div');
-    artist.className = 'album-artist';
+    artist.className = 'album-artist artist-link';
     artist.textContent = (r.author || '') + (r.views ? ' \u00B7 ' + fmtViews(r.views) : '');
+    if (r.author) {
+      artist.title = 'Ver perfil de ' + r.author;
+      artist.addEventListener('click', (e) => { e.stopPropagation(); openArtistProfile(r.author); });
+    }
     info.appendChild(title);
     info.appendChild(artist);
 
@@ -3174,7 +3555,7 @@ async function loadTrendingSection() {
       playYouTubeResult(r, items);
     });
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.album-play-btn')) return;
+      if (e.target.closest('.album-play-btn') || e.target.closest('.artist-link')) return;
       playYouTubeResult(r, items);
     });
 
@@ -3268,6 +3649,7 @@ async function performSearch(raw) {
     const known = TRACKS.filter(t => t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q));
 
     resultsEl.innerHTML = `
+      <div id="artist-chip"></div>
       <div id="yt-search-section">
         <h3 class="section-title" style="margin-bottom:12px">Resultados</h3>
         <div id="yt-search-results"><p class="yt-search-status">Buscando\u2026</p></div>
@@ -3285,8 +3667,55 @@ async function performSearch(raw) {
       const container = document.getElementById('yt-search-results');
       if (!container) return;
       renderYtSearchResults(container, results);
+      // Se a pesquisa corresponde a um artista, oferece o perfil dele
+      maybeShowArtistChip(raw, myToken);
     }, 500);
   }
+}
+
+// Mostra um cartao "Artista — Ver perfil" acima dos resultados quando a
+// pesquisa corresponde a um canal do YouTube (ex.: nome de artista).
+async function maybeShowArtistChip(query, token) {
+  if (!document.getElementById('artist-chip')) return;
+  const channels = await searchYouTubeChannels(query);
+  if (token !== ytSearchToken) return; // pesquisa mudou enquanto buscava
+  const host = document.getElementById('artist-chip');
+  if (!host || !channels.length) return;
+
+  const qn = query.trim().toLowerCase();
+  const best = channels.find(c => {
+    const n = c.name.trim().toLowerCase();
+    return n === qn || n.includes(qn) || qn.includes(n);
+  });
+  if (!best) return;
+
+  host.replaceChildren();
+  const card = document.createElement('div');
+  card.className = 'artist-chip';
+  card.title = 'Ver perfil de ' + best.name;
+  if (best.avatar) {
+    const img = document.createElement('img');
+    img.src = best.avatar; img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+    img.onerror = function () { this.remove(); };
+    card.appendChild(img);
+  }
+  const info = document.createElement('div');
+  info.className = 'artist-chip-info';
+  info.innerHTML = '<div class="artist-chip-kicker">Artista</div>';
+  const nm = document.createElement('div');
+  nm.className = 'artist-chip-name'; nm.textContent = best.name;
+  info.appendChild(nm);
+  if (best.subs) {
+    const m = document.createElement('div');
+    m.className = 'artist-chip-meta'; m.textContent = fmtCompact(best.subs) + ' inscritos';
+    info.appendChild(m);
+  }
+  card.appendChild(info);
+  const cta = document.createElement('span');
+  cta.className = 'artist-chip-cta'; cta.textContent = 'Ver perfil \u2192';
+  card.appendChild(cta);
+  card.addEventListener('click', () => openArtistProfile(best.name));
+  host.appendChild(card);
 }
 
 function escapeHtml(text) {
@@ -3328,6 +3757,15 @@ function renderYtSearchResults(container, results) {
     const a = document.createElement('div');
     a.className = 'track-artist';
     a.textContent = r.author + (r.views ? ' \u00B7 ' + fmtViews(r.views) : '');
+    if (r.author) {
+      // Clique no nome do artista abre o perfil dele (conteudo do canal)
+      a.classList.add('artist-link');
+      a.title = 'Ver perfil de ' + r.author;
+      a.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openArtistProfile(r.author);
+      });
+    }
     details.appendChild(t);
     details.appendChild(a);
 
@@ -3441,7 +3879,7 @@ function renderLibrary() {
   } else {
     const note = document.createElement('p');
     note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:12px';
-    note.textContent = 'Nenhuma playlist criada ainda. Vá para o Início e clique em "Nova".';
+    note.textContent = 'Nenhuma playlist criada ainda. Vá para o Início e use o menu "..." > "Nova playlist".';
     acc.appendChild(note);
   }
   attachTrackListeners();
@@ -3581,7 +4019,15 @@ function clearRecent() {
 }
 
 function renderRecent() {
-  const tracks = state.history.slice(0, 30).map(h => getTrack(h.trackId)).filter(Boolean);
+  // Mostra TODO o historico (ate 100 reproducoes). Faixas do YouTube
+  // que ainda nao existem em TRACKS (apos um reload) sao recriadas a
+  // partir dos metadados guardados no proprio historico.
+  const tracks = state.history.map(h => {
+    const t = getTrack(h.trackId);
+    if (t) return t;
+    if (h.videoId) return materializeYtTrack(h.videoId, h.title, h.artist, 0);
+    return null;
+  }).filter(Boolean);
   main.innerHTML = `
     <div class="section">
       ${backButton()}
@@ -3592,7 +4038,7 @@ function renderRecent() {
           Limpar
         </button>` : ''}
       </div>
-      ${tracks.length ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg><p>Nenhuma música tocada ainda. Comece a ouvir!</p></div>`}
+      ${tracks.length ? `<p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 12px">${tracks.length} reproduções (as últimas 100 ficam guardadas)</p><div class="track-list">${tracks.map((t, i) => trackRow(t, i + 1, tracks)).join('')}</div>` : `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg><p>Nenhuma música tocada ainda. Comece a ouvir!</p></div>`}
     </div>
   `;
   const clearBtn = document.getElementById('btn-clear-recent');
@@ -3612,7 +4058,7 @@ function trackRow(track, num, tracks) {
         ${isActive && state.isPlaying ? `<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>` : `<span>${num}</span>`}
         <svg class="track-play-icon" viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
       </div>
-      <img src="${track.cover}" alt="" class="track-thumb" loading="lazy">
+      <img src="${track.cover}" alt="" class="track-thumb" loading="lazy" decoding="async">
       <div class="track-details">
         <div class="track-title">${escapeHtml(track.title)}</div>
         <div class="track-artist">${escapeHtml(track.artist)}</div>
@@ -3765,49 +4211,79 @@ const iconVol = document.getElementById('icon-vol');
 const iconMute = document.getElementById('icon-mute');
 const volumeSlider = document.getElementById('volume-slider');
 
+// Cache do ultimo estado renderizado: o poll chama updatePlayerUI a cada
+// 500ms, mas quase nada muda entre ticks. So escrever no DOM o que
+// realmente mudou elimina style/layout recalcs constantes.
+const _uiCache = {
+  trackId: null, playing: null, liked: null, shuffled: null,
+  repeat: null, muted: null, prog: -1, cur: '', total: '', qlen: -1,
+};
+
 function updatePlayerUI() {
   const t = state.currentTrack;
   if (!t) return;
 
+  const trackChanged = _uiCache.trackId !== t.id;
+  const playChanged = _uiCache.playing !== state.isPlaying;
+
   // Garante que o VU meter volte a animar quando algo comeca a tocar
-  if (state.isPlaying) ensureVuMeter();
+  if (state.isPlaying && playChanged) ensureVuMeter();
 
-  playerCover.src = t.cover;
-  playerTitle.textContent = t.title;
-  playerArtist.textContent = t.artist;
+  if (trackChanged) {
+    playerCover.src = t.cover;
+    playerTitle.textContent = t.title;
+    playerArtist.textContent = t.artist;
+  }
 
-  iconPlay.style.display = state.isPlaying ? 'none' : '';
-  iconPause.style.display = state.isPlaying ? '' : 'none';
+  if (playChanged) {
+    iconPlay.style.display = state.isPlaying ? 'none' : '';
+    iconPause.style.display = state.isPlaying ? '' : 'none';
+  }
 
   if (!isScrubbing) {
     const prog = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0;
-    progressFill.style.width = prog + '%';
-    progressHandle.style.left = prog + '%';
-
-    timeCurrent.textContent = fmtTime(state.currentTime);
-    timeTotal.textContent = '-' + fmtTime(Math.max(0, state.duration - state.currentTime));
+    const progKey = Math.round(prog * 10); // resolucao de 0,1%
+    if (progKey !== _uiCache.prog) {
+      _uiCache.prog = progKey;
+      progressFill.style.width = prog + '%';
+      progressHandle.style.left = prog + '%';
+    }
+    const cur = fmtTime(state.currentTime);
+    if (cur !== _uiCache.cur) { _uiCache.cur = cur; timeCurrent.textContent = cur; }
+    const total = '-' + fmtTime(Math.max(0, state.duration - state.currentTime));
+    if (total !== _uiCache.total) { _uiCache.total = total; timeTotal.textContent = total; }
   }
 
-  btnLike.classList.toggle('liked', state.likedTracks.has(t.id));
-  btnShuffle.classList.toggle('active', state.isShuffled);
+  const liked = state.likedTracks.has(t.id);
+  if (liked !== _uiCache.liked || trackChanged) btnLike.classList.toggle('liked', liked);
+  if (state.isShuffled !== _uiCache.shuffled) btnShuffle.classList.toggle('active', state.isShuffled);
+  if (state.repeatMode !== _uiCache.repeat) {
+    iconRepeat.style.display = state.repeatMode === 'one' ? 'none' : '';
+    iconRepeat1.style.display = state.repeatMode === 'one' ? '' : 'none';
+    btnRepeat.classList.toggle('active', state.repeatMode !== 'off');
+  }
+  if (state.isMuted !== _uiCache.muted) {
+    iconVol.style.display = state.isMuted ? 'none' : '';
+    iconMute.style.display = state.isMuted ? '' : 'none';
+  }
 
-  iconRepeat.style.display = state.repeatMode === 'one' ? 'none' : '';
-  iconRepeat1.style.display = state.repeatMode === 'one' ? '' : 'none';
-  btnRepeat.classList.toggle('active', state.repeatMode !== 'off');
-
-  iconVol.style.display = state.isMuted ? 'none' : '';
-  iconMute.style.display = state.isMuted ? '' : 'none';
-
-  refreshQueuePanel();
-  if (isExpanded) {
-    if (state.playerMode === 'cover') fillExpandedCover();
+  // Fila e vistas do player expandido: so quando algo relevante mudou
+  const qlen = state.queue.length;
+  const queueDirty = trackChanged || playChanged || qlen !== _uiCache.qlen;
+  if (queueDirty) refreshQueuePanel();
+  if (isExpanded && (trackChanged || playChanged)) {
+    if (state.playerMode === 'cover' && trackChanged) fillExpandedCover();
     if (state.playerMode === 'queue') buildExpandedQueue(false);
-    updateExpandedContext();
-    loadRelatedVideos();
+    if (trackChanged) {
+      updateExpandedContext();
+      loadRelatedVideos();
+    }
   }
 
-  // Refresh track rows to show equalizer
-  if (state.view === 'home' || state.view === 'album' || state.view === 'playlist') {
+  // Equalizer nas linhas de faixa: caro em listas longas — so na troca
+  // de faixa ou play/pause, nunca a cada tick do poll
+  if ((trackChanged || playChanged) &&
+      (state.view === 'home' || state.view === 'album' || state.view === 'playlist')) {
     document.querySelectorAll('.track-row').forEach(row => {
       if (!row.dataset.track) return; // linhas de resultado do YouTube nao participam
       const isActive = row.dataset.track === t.id;
@@ -3822,6 +4298,14 @@ function updatePlayerUI() {
       }
     });
   }
+
+  _uiCache.trackId = t.id;
+  _uiCache.playing = state.isPlaying;
+  _uiCache.liked = liked;
+  _uiCache.shuffled = state.isShuffled;
+  _uiCache.repeat = state.repeatMode;
+  _uiCache.muted = state.isMuted;
+  _uiCache.qlen = qlen;
 }
 
 // Player controls
@@ -3970,6 +4454,8 @@ const vuTargets = new Float32Array(NUM_VU_BARS);
 const vuCurrents = new Float32Array(NUM_VU_BARS);
 
 let vuRunning = false;
+let vuLastTs = 0;
+const VU_FRAME_MS = 33; // ~30fps: indistinguivel a olho nesse tamanho, metade do custo
 
 // Inicia o loop do VU meter apenas se ele nao estiver rodando.
 // O loop se auto-encerra quando fica ocioso (nada tocando e barras ja no
@@ -3980,7 +4466,13 @@ function ensureVuMeter() {
   drawVUMeter();
 }
 
-function drawVUMeter() {
+function drawVUMeter(ts) {
+  // Throttle a ~30fps: pula o desenho, mantem o agendamento
+  if (ts && ts - vuLastTs < VU_FRAME_MS) {
+    requestAnimationFrame(drawVUMeter);
+    return;
+  }
+  if (ts) vuLastTs = ts;
   vuCtx.clearRect(0, 0, vuCanvas.width, vuCanvas.height);
 
   const time = Date.now() / 1000;
@@ -4035,7 +4527,11 @@ resizeBg();
 window.addEventListener('resize', resizeBg);
 
 const COLORS = ['#0AE448', '#FF5C00', '#0070F3', '#E0E0E0'];
-const particles = Array.from({ length: 50 }, () => ({
+// Menos particulas = custo quadratico bem menor na malha de conexoes
+// (50 -> 36 no desktop e 22 no mobile corta ~50%/80% dos pares testados)
+const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const PARTICLE_COUNT = (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) ? 22 : 36;
+const particles = Array.from({ length: PARTICLE_COUNT }, () => ({
   x: Math.random() * bgW,
   y: Math.random() * bgH,
   vx: (Math.random() - 0.5) * 0.3,
@@ -4051,19 +4547,30 @@ let particlesRunning = false;
 // Enquanto a aba estiver oculta o laco se encerra (nada e desenhado);
 // visibilitychange o retoma ao voltar o foco.
 function ensureParticles() {
+  if (REDUCED_MOTION) return; // preferencia do sistema: sem decoracao animada
   if (particlesRunning || document.hidden) return;
   particlesRunning = true;
   drawParticles();
 }
 
-function drawParticles() {
+let bgLastTs = 0;
+const BG_FRAME_MS = 40;      // ~25fps: suficiente para particulas ambiente lentas
+const CONNECT_DIST = 150;
+const CONNECT_DIST_SQ = CONNECT_DIST * CONNECT_DIST;
+
+function drawParticles(ts) {
   if (document.hidden) { particlesRunning = false; return; }
   requestAnimationFrame(drawParticles);
+  // Throttle: desenha a ~25fps; o movimento e baseado em tempo real,
+  // entao a velocidade visual nao muda com o framerate
+  if (ts && ts - bgLastTs < BG_FRAME_MS) return;
+  const dt = ts ? Math.min(3, (ts - bgLastTs) / 16.7) : 1;
+  if (ts) bgLastTs = ts;
   bgCtx.clearRect(0, 0, bgW, bgH);
 
   for (const p of particles) {
-    p.x += p.vx;
-    p.y += p.vy;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
     if (p.x < 0) p.x = bgW;
     if (p.x > bgW) p.x = 0;
     if (p.y < 0) p.y = bgH;
@@ -4076,16 +4583,16 @@ function drawParticles() {
     bgCtx.fill();
   }
 
-  // Connections
+  // Connections (distancia ao quadrado: sem sqrt no laco O(n^2))
   bgCtx.strokeStyle = '#0AE448';
   bgCtx.lineWidth = 0.5;
   for (let i = 0; i < particles.length; i++) {
     for (let j = i + 1; j < particles.length; j++) {
       const dx = particles[i].x - particles[j].x;
       const dy = particles[i].y - particles[j].y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < 150) {
-        bgCtx.globalAlpha = 0.02 * (1 - dist / 150);
+      const distSq = dx * dx + dy * dy;
+      if (distSq < CONNECT_DIST_SQ) {
+        bgCtx.globalAlpha = 0.02 * (1 - Math.sqrt(distSq) / CONNECT_DIST);
         bgCtx.beginPath();
         bgCtx.moveTo(particles[i].x, particles[i].y);
         bgCtx.lineTo(particles[j].x, particles[j].y);
@@ -4096,6 +4603,7 @@ function drawParticles() {
   bgCtx.globalAlpha = 1;
 }
 ensureParticles();
+
 
 // ============================================
 // BARRA SUPERIOR (busca global + navegacao)
@@ -4280,6 +4788,18 @@ document.getElementById('btn-expand').addEventListener('click', toggleExpanded);
 // ============================================
 // INIT
 // ============================================
+// Sempre que a pagina e atualizada (recarregada), as informacoes tambem
+// sao: os caches persistentes de conteudo dinamico sao invalidados no
+// boot, entao Mixes, Novidades, Tendencias e as playlists por gosto sao
+// rebuscados com dados frescos a cada carregamento. Os caches continuam
+// valendo DENTRO da sessao (evitam martelar as instancias publicas ao
+// navegar entre abas), mas nunca sobrevivem a um F5.
+(function refreshOnPageLoad() {
+  ['vibefm_news_cache', 'vibefm_taste_yt_playlists', 'vibefm_trending_cache'].forEach(k => {
+    try { localStorage.removeItem(k); } catch (_) {}
+  });
+})();
+
 // Recria em TRACKS as faixas curtidas em sessoes anteriores (metadados persistidos),
 // para que "Curtidas" e o perfil de recomendacao funcionem apos recarregar.
 if (typeof Reco !== 'undefined') Reco.hydrateLikes();
