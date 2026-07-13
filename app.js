@@ -1683,15 +1683,34 @@ function fmtViews(v) {
   }
 }
 
+// Filtro de ordenacao da busca: 'relevance' (padrao), 'views', 'date'
+let ytSearchSort = 'relevance';
+
+function setYtSearchSort(sort) {
+  ytSearchSort = sort;
+}
+
+function getYtSearchSort() {
+  return ytSearchSort;
+}
+
 async function searchYouTube(query) {
   const q = query.trim();
-  if (ytSearchCache.has(q)) return ytSearchCache.get(q);
+  const cacheKey = q + '|sort=' + ytSearchSort;
+  if (ytSearchCache.has(cacheKey)) return ytSearchCache.get(cacheKey);
 
   for (const src of YT_SEARCH_SOURCES) {
     try {
-      const url = src.kind === 'piped'
-        ? src.base + '/search?q=' + encodeURIComponent(q) + '&filter=videos'
-        : src.base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=video';
+      let url;
+      if (src.kind === 'piped') {
+        url = src.base + '/search?q=' + encodeURIComponent(q) + '&filter=videos';
+        if (ytSearchSort === 'views') url += '&sort_by=views';
+        else if (ytSearchSort === 'date') url += '&sort_by=date';
+      } else {
+        url = src.base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=video';
+        if (ytSearchSort === 'views') url += '&sort=views';
+        else if (ytSearchSort === 'date') url += '&sort=date';
+      }
       const res = await fetchWithTimeout(url, 4500);
       if (!res.ok) continue;
       const data = await res.json();
@@ -1699,18 +1718,16 @@ async function searchYouTube(query) {
         ? normalizePiped(data && data.items)
         : normalizeInvidious(data);
       // Mecanismo sem anuncios: filtra promocoes/patrocinados na origem.
-      // Todos os consumidores (busca, relacionados, mixes, novidades)
-      // recebem apenas conteudo real.
       const items = AdShield.filter(raw);
       if (items.length) {
         // Acuracia: os mais reproduzidos primeiro (relevancia por views)
         const top = rankByPlays(items).slice(0, 12);
-        ytSearchCache.set(q, top);
+        ytSearchCache.set(cacheKey, top);
         return top;
       }
     } catch (_) { /* tenta a proxima instancia */ }
   }
-  ytSearchCache.set(q, []);
+  ytSearchCache.set(cacheKey, []);
   return [];
 }
 
@@ -2566,6 +2583,134 @@ const UserPlaylists = (function () {
   }
 
   return { load, create, remove, addItem, removeItem, itemKey, setOrder, tracksOf, exportJson, importJson };
+})();
+
+// ============================================
+// PERFIL DO USUARIO (personalizacao)
+// Nome de exibicao editavel na pagina Perfil.
+// Persistido em 'vibefm_profile' — apenas apresentacao,
+// nao participa de nenhuma logica de negocio.
+// ============================================
+const UserProfile = (function () {
+  const STORAGE_KEY = 'vibefm_profile';
+  const DEFAULT_NAME = 'Ouvinte';
+
+  function load() {
+    try {
+      const p = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      return (p && typeof p === 'object') ? p : {};
+    } catch (_) { return {}; }
+  }
+  function persist(p) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (_) {}
+  }
+
+  function name() {
+    const n = (load().name || '').trim();
+    return n || DEFAULT_NAME;
+  }
+  function setName(n) {
+    n = String(n || '').trim().slice(0, 40);
+    if (!n) return false;
+    const p = load();
+    p.name = n;
+    persist(p);
+    return true;
+  }
+  function initial() {
+    return name().trim().charAt(0).toUpperCase() || 'O';
+  }
+
+  return { name, setName, initial, DEFAULT_NAME };
+})();
+
+// ============================================
+// TAKEOUT — portabilidade de dados
+// Exporta TODOS os dados do usuario salvos no localStorage
+// (playlists, curtidas, links salvos, gostos, historico,
+// estatisticas, caches etc.) para um arquivo .json e permite
+// restaura-los em outro dispositivo via upload do arquivo.
+// Nao altera nenhuma logica: apenas le/escreve as mesmas
+// chaves ja usadas pelos modulos existentes.
+// ============================================
+const Takeout = (function () {
+  // Todas as chaves da aplicacao usam estes prefixos
+  const PREFIXES = ['vibefm_', 'minstream_'];
+
+  function ownKeys() {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && PREFIXES.some(p => k.startsWith(p))) keys.push(k);
+    }
+    return keys.sort();
+  }
+
+  function collect() {
+    const data = {};
+    ownKeys().forEach(k => {
+      try {
+        const v = localStorage.getItem(k);
+        if (v !== null) data[k] = v; // valores brutos (strings), como estao no storage
+      } catch (_) {}
+    });
+    return data;
+  }
+
+  // Gera e baixa o arquivo minstream-takeout-AAAA-MM-DD.json
+  function download() {
+    const payload = {
+      app: 'MinStream',
+      kind: 'takeout',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      data: collect(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'minstream-takeout-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    showToast('Takeout gerado: seus dados foram baixados em .json');
+  }
+
+  // Restaura um arquivo de takeout: grava as chaves no localStorage
+  // e recarrega a pagina para que todos os modulos re-hidratem o
+  // estado pelos caminhos normais de boot (sem tocar na logica).
+  function restore(file, onFail) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const payload = JSON.parse(reader.result);
+        const data = (payload && payload.kind === 'takeout' && payload.data && typeof payload.data === 'object')
+          ? payload.data : null;
+        if (!data) throw new Error('formato');
+        const keys = Object.keys(data).filter(k =>
+          typeof data[k] === 'string' && PREFIXES.some(p => k.startsWith(p)));
+        if (!keys.length) throw new Error('vazio');
+        let applied = 0;
+        keys.forEach(k => {
+          try { localStorage.setItem(k, data[k]); applied++; } catch (_) {}
+        });
+        if (!applied) throw new Error('vazio');
+        showToast(applied + ' registro(s) restaurado(s). Recarregando…');
+        setTimeout(() => location.reload(), 900);
+      } catch (_) {
+        showToast('Arquivo de takeout inválido');
+        if (onFail) onFail();
+      }
+    };
+    reader.onerror = () => {
+      showToast('Não foi possível ler o arquivo');
+      if (onFail) onFail();
+    };
+    reader.readAsText(file);
+  }
+
+  return { download, restore, count: () => ownKeys().length };
 })();
 
 // ============================================
@@ -3767,12 +3912,40 @@ async function performSearch(raw) {
     resultsEl.innerHTML = `
       <div id="artist-chip"></div>
       <div id="yt-search-section">
-        <h3 class="section-title" style="margin-bottom:12px">Resultados</h3>
+        <div class="search-results-header">
+          <h3 class="section-title" style="margin-bottom:0">Resultados</h3>
+          <div class="search-filter-bar" id="search-filter-bar">
+            <button class="search-filter-btn" data-sort="relevance">Relevância</button>
+            <button class="search-filter-btn" data-sort="views">Mais visualizado</button>
+            <button class="search-filter-btn" data-sort="date">Mais recente</button>
+          </div>
+        </div>
         <div id="yt-search-results"><p class="yt-search-status">Buscando\u2026</p></div>
       </div>
       ${known.length ? `<h3 class="section-title" style="margin:24px 0 12px">Já tocadas nesta sessão</h3><div class="track-list">${known.map((t, i) => trackRow(t, i + 1, known)).join('')}</div>` : ''}
     `;
     attachTrackListeners();
+
+    // Inicializa os botoes de filtro de ordenacao
+    const filterBar = document.getElementById('search-filter-bar');
+    if (filterBar) {
+      const buttons = filterBar.querySelectorAll('.search-filter-btn');
+      buttons.forEach(btn => {
+        const sort = btn.dataset.sort;
+        btn.classList.toggle('active', sort === ytSearchSort);
+        btn.addEventListener('click', () => {
+          if (sort === ytSearchSort) return;
+          setYtSearchSort(sort);
+          buttons.forEach(b => b.classList.toggle('active', b.dataset.sort === sort));
+          // Refaz a busca com o novo filtro
+          const currentQuery = globalSearchInput.value.trim();
+          if (currentQuery) {
+            ytSearchCache.clear();
+            performSearch(currentQuery);
+          }
+        });
+      });
+    }
 
     // Debounce: so busca no YouTube depois que o usuario para de digitar
     if (ytSearchDebounce) clearTimeout(ytSearchDebounce);
@@ -4135,48 +4308,108 @@ function renderLibrary() {
   attachTrackListeners();
 }
 
+// Estado (em memoria) das secoes recolhiveis do Perfil.
+// Por padrao TODAS vem recolhidas a cada carregamento da pagina;
+// dentro da sessao o estado e preservado entre re-renders para a
+// secao em uso nao fechar ao adicionar um gosto, alternar o
+// AdShield etc. Ordem: Gostos, Metricas, Configuracoes.
+const profileSectionsOpen = { tastes: false, metrics: false, settings: false };
+
+function profileCollapseSection(key, title, subtitle, iconSvg, innerHtml) {
+  const open = !!profileSectionsOpen[key];
+  return `
+    <div class="section profile-collapse ${open ? 'open' : ''}" data-psec="${key}">
+      <button class="profile-collapse-head" data-psec-toggle="${key}" aria-expanded="${open}">
+        <span class="profile-collapse-icon">${iconSvg}</span>
+        <span class="profile-collapse-titles">
+          <span class="profile-collapse-title">${title}</span>
+          <span class="profile-collapse-sub">${subtitle}</span>
+        </span>
+        <svg class="profile-collapse-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="profile-collapse-body">
+        <div class="profile-collapse-inner">${innerHtml}</div>
+      </div>
+    </div>`;
+}
+
 function renderProfile() {
+  const displayName = UserProfile.name();
   const uniqueTracks = new Set(state.history.map(h => h.trackId));
   const totalTime = state.history.length * 240;
   const tastes = Tastes.load();
   const suggestions = ['Indie', 'Synthwave', 'Rock', 'Pop', 'Música Brasileira', 'Jazz', 'Lo-Fi', 'Eletrônica', 'Hip Hop', 'MPB', 'Sertanejo', 'Clássica', 'Metal', 'Reggae', 'Funk']
     .filter(s => !tastes.some(t => t.toLowerCase() === s.toLowerCase()));
 
-  main.innerHTML = `
-    <div class="section">
-      <div class="profile-header">
-        <img src="public/avatars/user-avatar.jpg" alt="Profile" class="profile-avatar" onerror="this.style.display='none'">
-        <div>
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px">Perfil</div>
-          <div class="profile-name">Ouvinte</div>
-          <p class="profile-bio">Suas playlists dinâmicas são geradas a partir dos gostos abaixo.</p>
-          <div class="profile-stats-row">
-            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg> ${state.likedTracks.size} curtidas</span>
-            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/></svg> ${uniqueTracks.size} ouvidas</span>
-            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg> ${Math.floor(totalTime / 3600)}h</span>
-          </div>
-        </div>
-      </div>
+  // Metricas de escuta — leitura dos modulos existentes (sem nova logica):
+  // Reco.buildProfile() ja combina curtidas + historico + PlayStats.
+  let topArtists = [], topGenres = [];
+  try {
+    if (typeof Reco !== 'undefined') {
+      const rp = Reco.buildProfile();
+      topArtists = (rp.topArtists || []).slice(0, 6);
+      topGenres = (rp.topGenres || []).slice(0, 6);
+    }
+  } catch (_) {}
+  const artistPlays = (typeof PlayStats !== 'undefined') ? PlayStats.artistPlays() : new Map();
+  const allStats = (typeof PlayStats !== 'undefined') ? PlayStats.top(600) : [];
+  const topTracks = allStats.slice(0, 5);
+  const totalPlays = allStats.reduce((s, e) => s + (e.plays || 0), 0);
+  const savedLinks = (typeof Gallery !== 'undefined') ? Gallery.load().length : 0;
+  const maxGenreScore = topGenres.length ? topGenres[0].score : 1;
+  const fmtPlays = n => n === 1 ? '1 reprodução' : (n + ' reproduções');
+
+  // ---------- Conteudo: secao GOSTOS ----------
+  const tastesHtml = `
+    <p class="psec-desc">Cada gênero vira uma playlist dinâmica no Início. Adicione, remova ou crie os seus.</p>
+    <div class="taste-chips" id="taste-chips"></div>
+    <div class="taste-add">
+      <input type="text" id="taste-input" placeholder="Adicionar gênero (ex.: bossa nova)" maxlength="40">
+      <button id="taste-add-btn">Adicionar</button>
+    </div>
+    ${suggestions.length ? `
+      <div style="margin-top:14px">
+        <div style="font-size:10.5px;color:var(--text-muted);margin-bottom:8px">Sugestões:</div>
+        <div class="taste-chips taste-suggestions" id="taste-suggestions"></div>
+      </div>` : ''}`;
+
+  // ---------- Conteudo: secao METRICAS ----------
+  const metricsHtml = `
+    <div class="stats-grid psec-stats-grid">
+      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#0AE448" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg><div class="stat-value">${Math.floor(totalTime / 3600)}</div><div class="stat-label">Horas Tocadas</div></div>
+      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#0AE448" stroke-width="2"><path d="M8 5v14l11-7z" fill="#0AE448" stroke="none"/></svg><div class="stat-value">${totalPlays}</div><div class="stat-label">Reproduções</div></div>
+      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#FF5C00" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg><div class="stat-value">${state.likedTracks.size}</div><div class="stat-label">Curtidas</div></div>
+      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#0070F3" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><div class="stat-value">${UserPlaylists.load().length}</div><div class="stat-label">Playlists</div></div>
+      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#E4B10A" stroke-width="2"><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2v-7"/><polyline points="16 6 12 2 8 6" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="2" x2="12" y2="15" stroke-linecap="round"/></svg><div class="stat-value">${savedLinks}</div><div class="stat-label">Links Salvos</div></div>
+      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#A3A3A3" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><div class="stat-value">${tastes.length}</div><div class="stat-label">Gostos</div></div>
     </div>
 
-    <div class="section" style="padding-top:0">
-      <h3 class="section-title" style="margin-bottom:6px">Seus Gostos</h3>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Cada gênero vira uma playlist dinâmica no Início. Adicione, remova ou crie os seus.</p>
-      <div class="taste-chips" id="taste-chips"></div>
-      <div class="taste-add">
-        <input type="text" id="taste-input" placeholder="Adicionar gênero (ex.: bossa nova)" maxlength="40">
-        <button id="taste-add-btn">Adicionar</button>
-      </div>
-      ${suggestions.length ? `
-        <div style="margin-top:14px">
-          <div style="font-size:10.5px;color:var(--text-muted);margin-bottom:8px">Sugestões:</div>
-          <div class="taste-chips taste-suggestions" id="taste-suggestions"></div>
-        </div>` : ''}
+    <div class="psec-block">
+      <h4 class="psec-subtitle">Quem você mais escuta</h4>
+      <p class="psec-desc">Baseado nas suas curtidas, histórico e contagem de reproduções. Toque em um artista para abrir o perfil dele.</p>
+      ${topArtists.length ? '<div class="top-artists-row" id="profile-top-artists"></div>'
+        : '<p class="profile-empty-note">Ouça algumas faixas para ver seus artistas mais escutados aqui.</p>'}
     </div>
 
-    <div class="section" style="padding-top:0">
-      <h3 class="section-title" style="margin-bottom:6px">Sem Anúncios e Promoções</h3>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Proteção do MinStream: filtra conteúdo patrocinado das buscas e recomendações e usa o player em modo de privacidade (sem anúncios personalizados).</p>
+    <div class="psec-block">
+      <h4 class="psec-subtitle">Faixas mais tocadas</h4>
+      <p class="psec-desc">Suas faixas com mais reproduções neste dispositivo. Toque para ouvir de novo.</p>
+      ${topTracks.length ? '<div class="top-tracks-list" id="profile-top-tracks"></div>'
+        : '<p class="profile-empty-note">Nenhuma reprodução registrada ainda.</p>'}
+    </div>
+
+    <div class="psec-block">
+      <h4 class="psec-subtitle">Gêneros que você mais ouve</h4>
+      <p class="psec-desc">Combinação dos seus gostos com os gêneros das faixas que você curte.</p>
+      ${topGenres.length ? '<div class="genre-bars" id="profile-genre-bars"></div>'
+        : '<p class="profile-empty-note">Adicione gostos ou curta faixas para montar este ranking.</p>'}
+    </div>`;
+
+  // ---------- Conteudo: secao CONFIGURACOES ----------
+  const settingsHtml = `
+    <div class="psec-block" style="margin-top:0">
+      <h4 class="psec-subtitle">Sem Anúncios e Promoções</h4>
+      <p class="psec-desc">Proteção do MinStream: filtra conteúdo patrocinado das buscas e recomendações e usa o player em modo de privacidade (sem anúncios personalizados).</p>
       <div class="adshield-card" id="adshield-card">
         <div class="adshield-icon ${AdShield.enabled() ? 'on' : ''}">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-linejoin="round"/>${AdShield.enabled() ? '<polyline points="9 12 11 14 15 10" stroke-linecap="round" stroke-linejoin="round"/>' : ''}</svg>
@@ -4189,17 +4422,214 @@ function renderProfile() {
       </div>
     </div>
 
-    <div class="stats-grid">
-      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#0AE448" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg><div class="stat-value">${Math.floor(totalTime / 3600)}</div><div class="stat-label">Horas Tocadas</div></div>
-      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#FF5C00" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg><div class="stat-value">${state.likedTracks.size}</div><div class="stat-label">Curtidas</div></div>
-      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#0070F3" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><div class="stat-value">${UserPlaylists.load().length}</div><div class="stat-label">Playlists</div></div>
-      <div class="stat-card"><svg viewBox="0 0 24 24" fill="none" stroke="#A3A3A3" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><div class="stat-value">${tastes.length}</div><div class="stat-label">Gostos</div></div>
+    <div class="psec-block">
+      <h4 class="psec-subtitle">Takeout — Levar seus dados</h4>
+      <p class="psec-desc">Baixe um arquivo .json com tudo o que está salvo neste navegador — playlists, curtidas, links salvos, gostos, histórico, estatísticas e preferências — e importe em outro dispositivo para continuar de onde parou.</p>
+      <div class="takeout-card">
+        <div class="takeout-icon">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke-linecap="round"/></svg>
+        </div>
+        <div class="takeout-info">
+          <div class="takeout-status">Seus dados neste dispositivo</div>
+          <div class="takeout-sub">${Takeout.count()} registro(s) no armazenamento local, prontos para exportar</div>
+        </div>
+        <div class="takeout-actions">
+          <button class="pl-action-btn takeout-primary" id="takeout-export">Baixar meus dados</button>
+          <button class="pl-action-btn" id="takeout-import">Importar takeout</button>
+        </div>
+      </div>
+      <p style="font-size:10.5px;color:var(--text-muted);margin-top:10px">Ao importar, os dados do arquivo substituem os registros de mesmo nome neste navegador e a página é recarregada.</p>
+    </div>`;
+
+  // ---------- Icones e resumos dos cabecalhos ----------
+  const icoTastes = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+  const icoMetrics = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10" stroke-linecap="round"/><line x1="12" y1="20" x2="12" y2="4" stroke-linecap="round"/><line x1="6" y1="20" x2="6" y2="14" stroke-linecap="round"/></svg>';
+  const icoSettings = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h0a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51h0a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v0a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
+
+  const subTastes = tastes.length
+    ? tastes.length + ' gênero(s): ' + escapeHtml(tastes.slice(0, 3).join(', ')) + (tastes.length > 3 ? '…' : '')
+    : 'Nenhum gênero definido ainda';
+  const subMetrics = Math.floor(totalTime / 3600) + 'h tocadas · ' + totalPlays + ' reproduções · ' + state.likedTracks.size + ' curtidas';
+  const subSettings = (AdShield.enabled() ? 'Proteção ativa' : 'Proteção desativada') + ' · Takeout de dados';
+
+  main.innerHTML = `
+    <div class="section">
+      <div class="profile-header">
+        <div class="profile-avatar profile-avatar-initial" aria-hidden="true">${escapeHtml(UserProfile.initial())}</div>
+        <div class="profile-header-info">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px">Perfil</div>
+          <div class="profile-name-row">
+            <div class="profile-name" id="profile-name-text">${escapeHtml(displayName)}</div>
+            <button class="profile-edit-btn" id="profile-edit-btn" title="Editar nome">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 014 4L7.5 20.5 2 22l1.5-5.5z" stroke-linejoin="round"/></svg>
+              <span>Editar</span>
+            </button>
+          </div>
+          <div class="profile-name-form hidden" id="profile-name-form">
+            <input type="text" id="profile-name-input" maxlength="40" placeholder="Seu nome" autocomplete="off" spellcheck="false">
+            <button class="pl-action-btn" id="profile-name-save">Salvar</button>
+            <button class="pl-action-btn profile-name-cancel" id="profile-name-cancel">Cancelar</button>
+          </div>
+          <p class="profile-bio">Suas playlists dinâmicas são geradas a partir dos seus gostos.</p>
+          <div class="profile-stats-row">
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg> ${state.likedTracks.size} curtidas</span>
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/></svg> ${uniqueTracks.size} ouvidas</span>
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14" stroke-linecap="round"/></svg> ${Math.floor(totalTime / 3600)}h</span>
+          </div>
+        </div>
+      </div>
     </div>
+
+    ${profileCollapseSection('tastes', 'Gostos', subTastes, icoTastes, tastesHtml)}
+    ${profileCollapseSection('metrics', 'Métricas', subMetrics, icoMetrics, metricsHtml)}
+    ${profileCollapseSection('settings', 'Configurações', subSettings, icoSettings, settingsHtml)}
+    <div style="height:24px"></div>
   `;
 
-  const chipsEl = document.getElementById('taste-chips');
+  // ----- Recolher/expandir secoes -----
+  main.querySelectorAll('[data-psec-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-psec-toggle');
+      profileSectionsOpen[key] = !profileSectionsOpen[key];
+      const sec = main.querySelector('.profile-collapse[data-psec="' + key + '"]');
+      if (sec) sec.classList.toggle('open', profileSectionsOpen[key]);
+      btn.setAttribute('aria-expanded', String(!!profileSectionsOpen[key]));
+    });
+  });
 
-  // Toggle do mecanismo sem anuncios
+  // ----- Edicao do nome -----
+  const nameForm = document.getElementById('profile-name-form');
+  const nameText = document.getElementById('profile-name-text');
+  const nameInput = document.getElementById('profile-name-input');
+  const openNameForm = () => {
+    nameInput.value = UserProfile.name();
+    nameForm.classList.remove('hidden');
+    nameText.style.display = 'none';
+    document.getElementById('profile-edit-btn').style.display = 'none';
+    nameInput.focus();
+    nameInput.select();
+  };
+  const closeNameForm = () => {
+    nameForm.classList.add('hidden');
+    nameText.style.display = '';
+    document.getElementById('profile-edit-btn').style.display = '';
+  };
+  const saveName = () => {
+    if (UserProfile.setName(nameInput.value)) {
+      renderProfile();
+      showToast('Nome atualizado para "' + UserProfile.name() + '"');
+    } else {
+      showToast('Digite um nome válido');
+      nameInput.focus();
+    }
+  };
+  document.getElementById('profile-edit-btn').addEventListener('click', openNameForm);
+  document.getElementById('profile-name-save').addEventListener('click', saveName);
+  document.getElementById('profile-name-cancel').addEventListener('click', closeNameForm);
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveName();
+    if (e.key === 'Escape') closeNameForm();
+    e.stopPropagation();
+  });
+
+  // ----- Metricas: quem voce mais escuta -----
+  const artistsEl = document.getElementById('profile-top-artists');
+  if (artistsEl) {
+    topArtists.forEach((a, i) => {
+      const plays = artistPlays.get(a.key) || 0;
+      const card = document.createElement('button');
+      card.className = 'top-artist-card';
+      card.title = 'Abrir perfil de ' + a.artist;
+      const av = document.createElement('span');
+      av.className = 'top-artist-avatar';
+      av.textContent = (a.artist || '?').trim().charAt(0).toUpperCase();
+      const nm = document.createElement('span');
+      nm.className = 'top-artist-name';
+      nm.textContent = a.artist;
+      const meta = document.createElement('span');
+      meta.className = 'top-artist-meta';
+      meta.textContent = '#' + (i + 1) + (plays ? ' · ' + fmtPlays(plays) : '');
+      card.appendChild(av); card.appendChild(nm); card.appendChild(meta);
+      card.addEventListener('click', () => openArtistProfile(a.artist));
+      artistsEl.appendChild(card);
+    });
+  }
+
+  // ----- Metricas: faixas mais tocadas -----
+  const tracksEl = document.getElementById('profile-top-tracks');
+  if (tracksEl) {
+    topTracks.forEach((e, i) => {
+      const row = document.createElement('button');
+      row.className = 'top-track-row';
+      row.title = 'Tocar "' + (e.title || '') + '"';
+      const rank = document.createElement('span');
+      rank.className = 'top-track-rank';
+      rank.textContent = i + 1;
+      const info = document.createElement('span');
+      info.className = 'top-track-info';
+      const t = document.createElement('span');
+      t.className = 'top-track-title';
+      t.textContent = e.title || 'Faixa';
+      const a = document.createElement('span');
+      a.className = 'top-track-artist';
+      a.textContent = e.artist || '';
+      info.appendChild(t); info.appendChild(a);
+      const badge = document.createElement('span');
+      badge.className = 'top-track-plays';
+      badge.textContent = fmtPlays(e.plays || 0);
+      row.appendChild(rank); row.appendChild(info); row.appendChild(badge);
+      row.addEventListener('click', () => {
+        const track = e.videoId
+          ? materializeYtTrack(e.videoId, e.title, e.artist, 0)
+          : getTrack(e.id);
+        if (!track) { showToast('Faixa indisponível no momento'); return; }
+        // Fila = o próprio ranking de mais tocadas (próxima/anterior seguem a lista)
+        const queue = topTracks
+          .map(x => x.videoId ? materializeYtTrack(x.videoId, x.title, x.artist, 0) : getTrack(x.id))
+          .filter(Boolean);
+        playTrack(track, queue.length ? queue : undefined);
+      });
+      tracksEl.appendChild(row);
+    });
+  }
+
+  // ----- Metricas: generos mais ouvidos -----
+  const genresEl = document.getElementById('profile-genre-bars');
+  if (genresEl) {
+    topGenres.forEach((g, i) => {
+      const row = document.createElement('div');
+      row.className = 'genre-bar-row';
+      const label = document.createElement('span');
+      label.className = 'genre-bar-label';
+      label.textContent = g.genre;
+      const barWrap = document.createElement('span');
+      barWrap.className = 'genre-bar-track';
+      const bar = document.createElement('span');
+      bar.className = 'genre-bar-fill';
+      bar.style.width = Math.max(8, Math.round((g.score / maxGenreScore) * 100)) + '%';
+      barWrap.appendChild(bar);
+      const rank = document.createElement('span');
+      rank.className = 'genre-bar-rank';
+      rank.textContent = '#' + (i + 1);
+      row.appendChild(rank); row.appendChild(label); row.appendChild(barWrap);
+      genresEl.appendChild(row);
+    });
+  }
+
+  // ----- Configuracoes: takeout -----
+  document.getElementById('takeout-export').addEventListener('click', () => Takeout.download());
+  const takeoutFile = document.createElement('input');
+  takeoutFile.type = 'file';
+  takeoutFile.accept = 'application/json,.json';
+  takeoutFile.style.display = 'none';
+  takeoutFile.addEventListener('change', () => {
+    if (takeoutFile.files && takeoutFile.files[0]) Takeout.restore(takeoutFile.files[0]);
+    takeoutFile.value = '';
+  });
+  main.appendChild(takeoutFile);
+  document.getElementById('takeout-import').addEventListener('click', () => takeoutFile.click());
+
+  // ----- Configuracoes: toggle do mecanismo sem anuncios -----
   const shieldBtn = document.getElementById('adshield-toggle');
   if (shieldBtn) shieldBtn.addEventListener('click', () => {
     const next = !AdShield.enabled();
@@ -4208,6 +4638,8 @@ function renderProfile() {
     showToast(next ? 'Proteção contra anúncios ativada' : 'Proteção contra anúncios desativada');
   });
 
+  // ----- Gostos: chips, adicao e sugestoes -----
+  const chipsEl = document.getElementById('taste-chips');
   tastes.forEach(genre => {
     const chip = document.createElement('span');
     chip.className = 'taste-chip';

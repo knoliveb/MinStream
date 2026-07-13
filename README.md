@@ -68,8 +68,17 @@ Depois acesse `http://localhost:8080`.
 - **Novidades para Você**: lançamentos recentes dos artistas/gêneros que você ouve (cache de 6h).
 
 ### Perfil e proteção
-- Edição dos **gostos** (gêneros) que alimentam as playlists dinâmicas, com sugestões.
-- Estatísticas de uso (horas, curtidas, playlists, gostos).
+- **Organização em seções recolhíveis**: abaixo do cabeçalho (avatar, nome e resumo, sempre visíveis), a página é dividida em três seções na ordem **Gostos → Métricas → Configurações**, todas **recolhidas por padrão** a cada carregamento. Cada cabeçalho mostra um resumo do conteúdo (ex.: gêneros escolhidos, horas/reproduções, estado da proteção) e expande/recolhe ao toque, com `aria-expanded` e animação (respeitando `prefers-reduced-motion`). Dentro da sessão, o estado aberto/fechado é preservado entre re-renders — adicionar um gosto ou alternar o AdShield não fecha a seção em uso.
+- **Nome personalizável**: o nome de exibição do perfil pode ser editado (botão "Editar" ao lado do nome); o avatar mostra a inicial do nome. Apenas apresentação — não afeta nenhuma lógica.
+- **Seção Gostos**: edição dos gêneros que alimentam as playlists dinâmicas, com sugestões.
+- **Seção Métricas**:
+  - Estatísticas de uso (horas, reproduções, curtidas, playlists, links salvos, gostos).
+  - **Quem você mais escuta**: cards com os artistas mais relevantes do seu perfil (curtidas + histórico + contagem de reproduções, via `Reco.buildProfile`), com a contagem local de reproduções; tocar em um card abre o perfil do artista.
+  - **Faixas mais tocadas**: top 5 do `PlayStats`, com a contagem por faixa; clicar reproduz a faixa usando o próprio ranking como fila.
+  - **Gêneros que você mais ouve**: barras proporcionais ao peso de cada gênero no perfil de gosto.
+- **Seção Configurações**:
+  - **AdShield**: filtro de conteúdo patrocinado + player em modo de privacidade.
+  - **Takeout (portabilidade de dados)**: baixa um arquivo `.json` com **todos** os dados do usuário salvos no `localStorage` (playlists, curtidas, links salvos, gostos, histórico, estatísticas, preferências e caches — todas as chaves `vibefm_*` e `minstream_*`). O mesmo arquivo pode ser **importado** em outro dispositivo: as chaves são gravadas de volta no `localStorage` e a página é recarregada para que o app re-hidrate o estado pelos caminhos normais de boot.
 - **AdShield**: filtra conteúdo patrocinado das buscas/recomendações e usa o player em modo de privacidade.
 
 ### Mobile (≤768px)
@@ -91,6 +100,9 @@ Depois acesse `http://localhost:8080`.
 | `vibefm_player_mode` | Modo do player expandido |
 | `vibefm_news_cache` | Cache de "Novidades" |
 | `minstream_last_track` | Última faixa tocada (retomada) |
+| `vibefm_profile` | Personalização do perfil (nome de exibição) |
+
+O **Takeout** (Perfil) exporta/importa todas as chaves acima (prefixos `vibefm_` e `minstream_`) em um único arquivo `.json`, para migrar os dados entre dispositivos.
 
 **Atualização a cada recarga**: sempre que a página é atualizada (F5), os caches persistentes de conteúdo dinâmico (Novidades, Tendências, playlists por gosto) são invalidados no boot — tudo é rebuscado com dados frescos. Dentro da sessão os caches continuam valendo, para não sobrecarregar as instâncias públicas.
 
