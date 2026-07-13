@@ -1878,6 +1878,116 @@ async function searchYouTubePlaylists(query) {
 }
 
 // ============================================
+// SHORTS DO YOUTUBE (videos curtos verticais)
+// Busca shorts usando as mesmas instancias Piped/Invidious.
+// Filtra por duracao curta (<= 90s) e palavras-chave tipicas de shorts.
+// Cache em memoria com TTL de 30 min.
+// ============================================
+const ytShortsCache = new Map();
+const SHORTS_TTL = 30 * 60 * 1000;
+const SHORTS_MAX_DURATION = 90; // segundos
+
+function normalizeShorts(items) {
+  return (items || [])
+    .filter(it => {
+      if (!it || !it.videoId) return false;
+      // So videos curtos
+      if (typeof it.duration === 'number' && it.duration > SHORTS_MAX_DURATION) return false;
+      if (typeof it.duration === 'number' && it.duration <= 0) return false;
+      return isValidId(it.videoId);
+    })
+    .map(it => ({
+      videoId: it.videoId,
+      title: it.title || '',
+      author: it.author || '',
+      channelId: it.channelId || '',
+      duration: it.duration || 0,
+      views: it.views || 0,
+    }));
+}
+
+async function searchYouTubeShorts(query) {
+  const q = query.trim();
+  const cacheKey = 'shorts:' + q;
+  const cached = ytShortsCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < SHORTS_TTL) return cached.items;
+
+  // Queries otimizadas para shorts: adiciona termos que ajudam a encontrar conteudo curto
+  const queries = [q, q + ' shorts', q + ' short'];
+  const uniqueQueries = [...new Set(queries)];
+
+  const allResults = [];
+  for (const src of YT_SEARCH_SOURCES) {
+    try {
+      for (const searchQ of uniqueQueries) {
+        const url = src.kind === 'piped'
+          ? src.base + '/search?q=' + encodeURIComponent(searchQ) + '&filter=videos'
+          : src.base + '/api/v1/search?q=' + encodeURIComponent(searchQ) + '&type=video';
+        const res = await fetchWithTimeout(url, 4000);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const raw = src.kind === 'piped'
+          ? normalizePiped(data && data.items)
+          : normalizeInvidious(data);
+        allResults.push(...(raw || []));
+      }
+      // Se conseguiu resultados de alguma instancia, para
+      if (allResults.length) break;
+    } catch (_) { /* tenta proxima instancia */ }
+  }
+
+  // Filtra por duracao e remove duplicados
+  const shorts = normalizeShorts(allResults);
+  const byId = new Map();
+  shorts.forEach(s => {
+    if (!byId.has(s.videoId)) byId.set(s.videoId, s);
+  });
+
+  // Ordena por views (mais populares primeiro)
+  const items = rankByPlays([...byId.values()]).slice(0, 20);
+  ytShortsCache.set(cacheKey, { items, at: Date.now() });
+  return items;
+}
+
+// Agrega shorts dos gostos e artistas do usuario
+async function fetchShortsForUser() {
+  const tastes = (typeof Tastes !== 'undefined' ? Tastes.load() : []).slice(0, 3);
+  const topArtists = (typeof PlayStats !== 'undefined') ? PlayStats.top(5) : [];
+
+  const queries = [];
+  tastes.forEach(t => queries.push(t + ' music shorts'));
+  topArtists.forEach(a => { if (a.artist) queries.push(a.artist + ' shorts'); });
+  // Fallback: queries genericas de shorts musicais
+  queries.push('music shorts', 'trending shorts music');
+
+  const unique = [...new Set(queries.map(q => q.trim()).filter(Boolean))];
+  if (!unique.length) return [];
+
+  // Busca com concorrencia limitada (max 3 simultaneas)
+  const allResults = [];
+  for (let i = 0; i < unique.length; i += 3) {
+    const batch = unique.slice(i, i + 3);
+    const results = await Promise.all(batch.map(q => searchYouTubeShorts(q).catch(() => [])));
+    results.forEach(list => allResults.push(...(list || [])));
+  }
+
+  // Deduplica por videoId
+  const byId = new Map();
+  allResults.forEach(r => {
+    if (!r.videoId || byId.has(r.videoId)) return;
+    byId.set(r.videoId, r);
+  });
+
+  // Embaralha para variedade e retorna ate 30 shorts
+  const shorts = [...byId.values()];
+  for (let i = shorts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shorts[i], shorts[j]] = [shorts[j], shorts[i]];
+  }
+  return shorts.slice(0, 30);
+}
+
+// ============================================
 // PERFIL DO ARTISTA
 // Ao pesquisar um artista, o app monta uma pagina de perfil que reune
 // o conteudo do canal dele no YouTube: avatar/banner, inscritos,
@@ -3471,6 +3581,7 @@ function renderSearch() {
           ${buildCarousel('search-trending', 'search-trending-carousel')}
         </div>
       </div>
+      <div id="tiles-container"></div>
     </div>
   `;
 
@@ -3497,6 +3608,9 @@ function renderSearch() {
 
   // Reexecuta a busca atual (se houver texto na barra superior)
   performSearch(globalSearchInput.value.trim());
+
+  // Secao Tiles: shorts verticais do YouTube relacionados aos gostos
+  renderTilesSection(document.getElementById('tiles-container'));
 }
 
 // Preenche a secao "Tendencias" da pagina de busca como um carrossel de
@@ -3574,6 +3688,8 @@ async function performSearch(raw) {
     if (!q) {
       resultsEl.innerHTML = '';
       genresEl.style.display = '';
+      // Tiles volta ao conteudo baseado nos gostos do usuario
+      renderTilesSection(document.getElementById('tiles-container'), '');
       return;
     }
     genresEl.style.display = 'none';
@@ -3669,6 +3785,8 @@ async function performSearch(raw) {
       renderYtSearchResults(container, results);
       // Se a pesquisa corresponde a um artista, oferece o perfil dele
       maybeShowArtistChip(raw, myToken);
+      // Atualiza os Tiles com shorts relacionados a busca
+      renderTilesSection(document.getElementById('tiles-container'), raw);
     }, 500);
   }
 }
@@ -3815,6 +3933,138 @@ function renderYtSearchResults(container, results) {
     list.appendChild(row);
   });
   container.appendChild(list);
+}
+
+// ============================================
+// TILES — SHORTS DO YOUTUBE (secao na pagina de busca)
+// Feed masonry estilo Pinterest com videos curtos verticais
+// relacionados aos gostos e artistas do usuario.
+// ============================================
+let tilesCache = null;
+let tilesToken = 0;
+let tilesCurrentQuery = null;
+
+function renderTilesSection(container, query) {
+  if (!container) return;
+
+  // Se a query mudou, invalida o cache
+  const queryKey = query || '';
+  if (queryKey !== tilesCurrentQuery) {
+    tilesCache = null;
+    tilesCurrentQuery = queryKey;
+  }
+
+  // Se ja existe a secao, reutiliza; senao cria
+  let section = document.getElementById('tiles-section');
+  if (!section) {
+    section = document.createElement('div');
+    section.className = 'tiles-section';
+    section.id = 'tiles-section';
+    container.appendChild(section);
+  }
+
+  const subtitleText = query
+    ? 'Vídeos curtos do YouTube relacionados a "' + escapeHtml(query) + '"'
+    : 'Vídeos curtos do YouTube baseados nos seus gostos';
+
+  section.innerHTML = `
+    <div class="tiles-header">
+      <h3 class="section-title">Tiles</h3>
+      <p class="tiles-subtitle">${subtitleText}</p>
+    </div>
+    <div class="tiles-masonry" id="tiles-masonry">
+      <p class="tiles-loading">Carregando shorts...</p>
+    </div>
+  `;
+
+  const masonry = section.querySelector('#tiles-masonry');
+  const token = ++tilesToken;
+
+  // Se ja tem cache valido para essa query, renderiza imediatamente
+  if (tilesCache && tilesCache.length) {
+    fillTilesMasonry(masonry, tilesCache);
+    return;
+  }
+
+  // Decide se busca por query ou por gostos do usuario
+  const fetcher = query ? searchYouTubeShorts(query) : fetchShortsForUser();
+
+  fetcher.then(shorts => {
+    if (token !== tilesToken) return;
+    tilesCache = shorts;
+    if (!shorts || !shorts.length) {
+      masonry.innerHTML = '<p class="tiles-loading">Nenhum short encontrado no momento. Tente novamente mais tarde.</p>';
+      return;
+    }
+    fillTilesMasonry(masonry, shorts);
+  }).catch(() => {
+    if (token !== tilesToken) return;
+    masonry.innerHTML = '<p class="tiles-loading">Erro ao carregar shorts. Tente novamente.</p>';
+  });
+}
+
+function fillTilesMasonry(masonry, shorts) {
+  masonry.innerHTML = '';
+  const frag = document.createDocumentFragment();
+
+  shorts.forEach((s, i) => {
+    const card = document.createElement('div');
+    card.className = 'tiles-card';
+    card.dataset.index = String(i);
+
+    const thumbWrap = document.createElement('div');
+    thumbWrap.className = 'tiles-thumb';
+
+    const img = document.createElement('img');
+    img.src = 'https://i.ytimg.com/vi/' + s.videoId + '/hqdefault.jpg';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    thumbWrap.appendChild(img);
+
+    // Overlay com botao de play
+    const overlay = document.createElement('div');
+    overlay.className = 'tiles-overlay';
+    overlay.innerHTML = '<button class="tiles-play-btn"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>';
+    thumbWrap.appendChild(overlay);
+
+    // Duracao
+    if (s.duration > 0) {
+      const dur = document.createElement('span');
+      dur.className = 'tiles-duration';
+      dur.textContent = fmtTime(s.duration);
+      thumbWrap.appendChild(dur);
+    }
+
+    // Info
+    const info = document.createElement('div');
+    info.className = 'tiles-info';
+    const title = document.createElement('div');
+    title.className = 'tiles-title';
+    title.textContent = s.title;
+    const author = document.createElement('div');
+    author.className = 'tiles-author';
+    author.textContent = s.author;
+    info.appendChild(title);
+    info.appendChild(author);
+
+    card.appendChild(thumbWrap);
+    card.appendChild(info);
+
+    // Clique toca o short
+    card.addEventListener('click', () => {
+      const track = materializeYtTrack(s.videoId, s.title, s.author, s.duration);
+      // Cria uma fila com todos os shorts para navegacao continua
+      const queue = shorts.map(sh => materializeYtTrack(sh.videoId, sh.title, sh.author, sh.duration));
+      playTrack(track, queue);
+      saveLastTrack();
+      startAutoVideoTimer();
+    });
+
+    frag.appendChild(card);
+  });
+
+  masonry.appendChild(frag);
 }
 
 function renderLibrary() {
