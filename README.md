@@ -9,6 +9,7 @@ MinStream é um streaming de música em página única (SPA/PWA) escrito em HTML
 | `index.html` | Layout base: topbar com busca, sidebar, player dock, player expandido, painel de fila, tab bar mobile e modais. |
 | `app.js` | Núcleo da aplicação: estado global, player, views (Início, Buscar, Biblioteca, Perfil), playlists do usuário, curtidas, histórico, links salvos, gostos e AdShield. |
 | `recommendations.js` | Motor de recomendação client-side (`Reco`): monta um perfil a partir de curtidas/histórico/gostos e gera "Mixes para Você" e "Novidades". Deve ser carregado **antes** de `app.js`. |
+| `lyrics.js` | Módulo de letra sincronizada (`Lyrics`): busca a letra da faixa no LRCLIB (serviço aberto/gratuito), sincroniza linha a linha com a reprodução e preenche os containers de letra dos dois players expandidos. Autocontido — apenas lê o estado do app; carregado **depois** de `app.js`. |
 | `style.css` | Todo o estilo, incluindo tema escuro, responsividade mobile (≤768px) e animações. |
 | `manifest.json` | Manifesto PWA (instalável, tela cheia, tema escuro). |
 
@@ -35,6 +36,13 @@ Depois acesse `http://localhost:8080`.
 - Retomada da última faixa tocada entre sessões.
 - **Sem legendas**: as legendas dos vídeos (inclusive as automáticas) são desativadas em todos os vídeos, em cada início de reprodução.
 - VU meter animado e "videoclipes relacionados" no modo expandido.
+- **Letra sincronizada (estilo Spotify)**: nos dois players expandidos (desktop e mobile), um container de **Letra** aparece logo após os controles do player e antes de "Videoclipes relacionados". A letra vem do **[LRCLIB](https://lrclib.net)** — serviço open source, gratuito e sem API key (formato LRC):
+  - **Fundo opaco na cor da capa**: o container é um cartão opaco cuja cor acompanha a cor de destaque da capa da faixa (a thumbnail é amostrada num canvas; o matiz dominante vira um tom escuro de fundo, com o texto em escala de branco para contraste estável). Capas acinzentadas ou ilegíveis caem num fallback neutro escuro; a cor transiciona suavemente na troca de faixa e fica em cache por capa.
+  - Quando existe letra **sincronizada**, a linha em execução é destacada e **a rolagem acompanha a letra**: um seguidor contínuo (rAF, aproximação exponencial ~600ms com teto de velocidade) desliza o scroll até a linha ativa no ritmo da música — sem saltos bruscos por linha. Rolagem manual pausa o seguidor por ~4s; **clicar em uma linha busca aquele instante** da faixa (reusa o `seekToTime` da barra de progresso); `prefers-reduced-motion` posiciona sem animar.
+  - **Alternador com/sem sincronização**: no canto superior direito do container há um botão "Sincronizada / Sem sincronia" que alterna entre a letra acompanhando a reprodução e o texto completo estático (preferência persistida, válida para os dois players; o botão só aparece quando há letra sincronizada).
+  - Quando só existe a versão **sem timestamps**, a letra é exibida como texto estático; quando não há letra (ou a faixa é instrumental), o container mostra **"Sem letra disponível"**.
+  - A correspondência limpa os metadados vindos do YouTube (remove "(Official Video)", "Artista - " duplicado, sufixos "VEVO"/"- Topic" etc.) e escolhe o melhor resultado por proximidade de duração e afinidade de artista/título, preferindo letras sincronizadas. Busca sob demanda (só com um player expandido aberto), com cache em memória por faixa e sem cache de falhas de rede.
+  - A seção pode ser **ativada/ocultada em Perfil → Configurações** ("Letra da música"), como as demais funcionalidades. No celular, também é possível ocultá-la **por modo do player** (Vídeo, Capa ou Fila) em "Player mobile — personalizar exibição", junto com os controles e os videoclipes relacionados.
 - Atalhos de teclado: `Espaço`, `Shift+←/→`, `M`, `S`, `R`, `L`, `T`, `F`, `Q`, `?`.
 
 ### Perfil do artista
@@ -78,6 +86,7 @@ Depois acesse `http://localhost:8080`.
   - **Gêneros que você mais ouve**: barras proporcionais ao peso de cada gênero no perfil de gosto.
 - **Seção Configurações**:
   - **AdShield**: filtro de conteúdo patrocinado + player em modo de privacidade.
+  - **Letra da música (sincronizada)**: mostra/oculta a seção de letra dos players expandidos (via LRCLIB). Preferência persistida e refletida na hora nos players abertos.
   - **Takeout (portabilidade de dados)**: baixa um arquivo `.json` com **todos** os dados do usuário salvos no `localStorage` (playlists, curtidas, links salvos, gostos, histórico, estatísticas, preferências e caches — todas as chaves `vibefm_*` e `minstream_*`). O mesmo arquivo pode ser **importado** em outro dispositivo, e a importação é **aditiva**: nada do que já existe é sobrescrito — os dados do arquivo são **somados** aos locais, respeitando o formato e os limites de cada módulo:
     - **Playlists**: playlists novas entram; nas de mesmo ID, as faixas que faltam são acrescentadas (dedupe pela mesma chave `l:`/`y:` do `UserPlaylists`), preservando nome e ordem locais.
     - **Curtidas, links salvos, gostos, buscas recentes, fixados/ocultos**: união sem duplicados (gostos e buscas deduplicam sem diferenciar maiúsculas; links pela chave `id|list`, com os mesmos tetos: 60 links, 5 buscas).
@@ -107,6 +116,9 @@ Depois acesse `http://localhost:8080`.
 | `vibefm_news_cache` | Cache de "Novidades" |
 | `minstream_last_track` | Última faixa tocada (retomada) |
 | `vibefm_profile` | Personalização do perfil (nome de exibição) |
+| `minstream_mp_prefs` | Personalização do player mobile por modo: controles, letra e videoclipes relacionados |
+| `minstream_lyrics` | Preferência de exibição da letra sincronizada nos players ('1' padrão / '0' oculta) |
+| `minstream_lyrics_sync` | Modo da letra: sincronizada ('1' padrão) ou texto completo sem sincronização ('0') |
 
 O **Takeout** (Perfil) exporta todas as chaves acima (prefixos `vibefm_` e `minstream_`) em um único arquivo `.json`; a importação em outro dispositivo é **aditiva** — soma os dados aos existentes, sem sobrescrever nada.
 
@@ -127,4 +139,4 @@ O botão **Exportar** (no menu "..." da Home) gera um backup das playlists em JS
 - `TRACKS` é um registro em memória populado dinamicamente (buscas, playlists dinâmicas e do usuário); não há catálogo pré-carregado.
 - IDs de faixa: locais (`trackId`) ou do YouTube (`yt_<videoId>`); dentro das playlists cada item usa a chave `l:<trackId>` ou `y:<videoId>`, que também é o critério de deduplicação.
 - A busca alterna automaticamente entre instâncias Piped/Invidious quando uma falha.
-- Sem dependências externas além das fontes do Google Fonts e da IFrame API do YouTube.
+- Sem dependências externas além das fontes do Google Fonts, da IFrame API do YouTube e da API pública do LRCLIB (letras; open source, sem chave).

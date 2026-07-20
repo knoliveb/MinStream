@@ -117,6 +117,21 @@
       </button>
     </div>
 
+    <!-- Letra da faixa (sincronizada quando disponível, via LRCLIB) -->
+    <div class="mp-lyrics" id="mp-lyrics">
+      <h3>Letra</h3>
+      <div class="lyrics-box-wrap">
+        <button class="lyrics-sync-toggle hidden" id="mp-lyrics-sync" aria-pressed="true" title="Alternar entre letra sincronizada e letra completa (sem sincronização)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" stroke-linecap="round"/></svg>
+          <span>Sincronizada</span>
+        </button>
+        <div class="lyrics-box" id="mp-lyrics-box">
+          <div class="lyrics-status">Sem letra disponível</div>
+        </div>
+      </div>
+      <div class="lyrics-credit hidden" id="mp-lyrics-credit">Letras fornecidas por LRCLIB</div>
+    </div>
+
     <!-- Relacionados (aparece ao rolar) -->
     <div class="mp-related hidden" id="mp-related">
       <h3>Videoclipes relacionados</h3>
@@ -173,6 +188,20 @@
       <div class="exp-queue-view">
         <ul class="queue-items" id="exp-queue-items"></ul>
       </div>
+    </div>
+    <!-- Letra da faixa (sincronizada quando disponível, via LRCLIB) -->
+    <div class="exp-lyrics" id="exp-lyrics">
+      <h3>Letra</h3>
+      <div class="lyrics-box-wrap">
+        <button class="lyrics-sync-toggle hidden" id="exp-lyrics-sync" aria-pressed="true" title="Alternar entre letra sincronizada e letra completa (sem sincronização)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" stroke-linecap="round"/></svg>
+          <span>Sincronizada</span>
+        </button>
+        <div class="lyrics-box" id="exp-lyrics-box">
+          <div class="lyrics-status">Sem letra disponível</div>
+        </div>
+      </div>
+      <div class="lyrics-credit hidden" id="exp-lyrics-credit">Letras fornecidas por LRCLIB</div>
     </div>
     <div class="exp-related" id="exp-related">
       <h3>Videoclipes relacionados</h3>
@@ -391,6 +420,8 @@
   <!-- Motor de recomendacao: precisa vir ANTES de app.js -->
   <script src="recommendations.js"></script>
   <script src="app.js"></script>
+  <!-- Letras sincronizadas via LRCLIB: le o estado do app, sem alterar a logica -->
+  <script src="lyrics.js"></script>
   <!-- YouTube IFrame API loaded AFTER app.js so the ready callback already exists -->
   <script src="https://www.youtube.com/iframe_api"></script>
   <!-- Android: vigia de reproducao em segundo plano (nao interfere no resto) -->

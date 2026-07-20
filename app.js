@@ -657,15 +657,18 @@ function setPlayerMode(mode) {
   if (expandedIsMobile) applyMobilePlayerPrefs();
 }
 
-// Mostra/esconde "Videoclipes relacionados" e os controles do player no
-// player mobile, conforme as preferencias do usuario para o modo atual.
+// Mostra/esconde "Videoclipes relacionados", os controles do player e a
+// secao de Letra no player mobile, conforme as preferencias do usuario
+// para o modo atual.
 function applyMobilePlayerPrefs() {
   if (!mobilePlayer) return;
   const mode = mobilePlayer.dataset.mode || 'cover';
   const showRelated = MobilePlayerPrefs.isVisible(mode, 'related');
   const showTransport = MobilePlayerPrefs.isVisible(mode, 'transport');
+  const showLyrics = MobilePlayerPrefs.isVisible(mode, 'lyrics');
 
   const related = document.getElementById('mp-related');
+  const lyrics = document.getElementById('mp-lyrics');
   // Bloco de controles = info+curtir, progresso, transporte e rodape
   const controlEls = [
     mobilePlayer.querySelector('.mp-meta-row'),
@@ -675,6 +678,7 @@ function applyMobilePlayerPrefs() {
   ];
 
   if (related) related.classList.toggle('mp-hidden-pref', !showRelated);
+  if (lyrics) lyrics.classList.toggle('mp-hidden-pref', !showLyrics);
   controlEls.forEach(el => { if (el) el.classList.toggle('mp-hidden-pref', !showTransport); });
 }
 
@@ -1903,12 +1907,12 @@ const ytSearchCache = new Map();
 const MobilePlayerPrefs = (function () {
   const KEY = 'minstream_mp_prefs';
   const MODES = ['video', 'cover', 'queue'];
-  const SECTIONS = ['related', 'transport'];
+  const SECTIONS = ['related', 'transport', 'lyrics'];
 
   function defaults() {
     // Tudo visivel por padrao
     const d = {};
-    MODES.forEach(m => { d[m] = { related: true, transport: true }; });
+    MODES.forEach(m => { d[m] = { related: true, transport: true, lyrics: true }; });
     return d;
   }
 
@@ -1940,7 +1944,7 @@ const MobilePlayerPrefs = (function () {
 
   function setVisible(mode, section, visible) {
     const p = load();
-    if (!p[mode]) p[mode] = { related: true, transport: true };
+    if (!p[mode]) p[mode] = { related: true, transport: true, lyrics: true };
     p[mode][section] = !!visible;
     save(p);
   }
@@ -5221,6 +5225,8 @@ function renderProfile() {
     </div>`;
 
   // ---------- Conteudo: secao CONFIGURACOES ----------
+  // Preferencia da letra sincronizada (modulo Lyrics em lyrics.js)
+  const lyricsOn = (typeof Lyrics !== 'undefined') ? Lyrics.enabled() : true;
   const settingsHtml = `
     <div class="psec-block" style="margin-top:0">
       <h4 class="psec-subtitle">Sem Anúncios e Promoções</h4>
@@ -5253,12 +5259,28 @@ function renderProfile() {
     </div>
 
     <div class="psec-block">
+      <h4 class="psec-subtitle">Letra da música (sincronizada)</h4>
+      <p class="psec-desc">Mostra a letra da faixa em execução nos players expandidos (desktop e mobile), logo após os controles e antes de "Videoclipes relacionados" — sincronizada em tempo real quando disponível, como no Spotify. As letras vêm do <strong>LRCLIB</strong>, um serviço aberto e gratuito; quando não houver letra, a seção mostra "Sem letra disponível".</p>
+      <div class="adshield-card" id="lyrics-card">
+        <div class="adshield-icon ${lyricsOn ? 'on' : ''}">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 013 3v8a3 3 0 01-6 0V4a3 3 0 013-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke-linecap="round"/></svg>
+        </div>
+        <div class="adshield-info">
+          <div class="adshield-status">${lyricsOn ? 'Letra visível nos players' : 'Letra oculta'}</div>
+          <div class="adshield-sub">${lyricsOn ? 'Sincronização automática via LRCLIB' : 'A seção de letra não é exibida nos players'}</div>
+        </div>
+        <button class="pl-action-btn" id="lyrics-toggle">${lyricsOn ? 'Desativar' : 'Ativar'}</button>
+      </div>
+    </div>
+
+    <div class="psec-block">
       <h4 class="psec-subtitle">Player mobile — personalizar exibição</h4>
-      <p class="psec-desc">Escolha, para cada modo do player no celular, se aparecem os <strong>controles do player</strong> (progresso, botões e curtir) e a seção <strong>Videoclipes relacionados</strong>. Vale apenas para a versão mobile.</p>
+      <p class="psec-desc">Escolha, para cada modo do player no celular, se aparecem os <strong>controles do player</strong> (progresso, botões e curtir), a seção <strong>Letra da música</strong> e a seção <strong>Videoclipes relacionados</strong>. Vale apenas para a versão mobile.</p>
       <div class="mpp-grid" id="mpp-grid">
         ${['video','cover','queue'].map(mode => {
           const label = mode === 'video' ? 'Vídeo' : (mode === 'cover' ? 'Capa' : 'Fila');
           const tOn = MobilePlayerPrefs.isVisible(mode, 'transport');
+          const lOn = MobilePlayerPrefs.isVisible(mode, 'lyrics');
           const rOn = MobilePlayerPrefs.isVisible(mode, 'related');
           return `
           <div class="mpp-mode">
@@ -5266,6 +5288,10 @@ function renderProfile() {
             <label class="mpp-row">
               <span>Controles do player</span>
               <button class="mpp-toggle ${tOn ? 'on' : ''}" data-mode="${mode}" data-section="transport" role="switch" aria-checked="${tOn}"><span class="mpp-knob"></span></button>
+            </label>
+            <label class="mpp-row">
+              <span>Letra da música</span>
+              <button class="mpp-toggle ${lOn ? 'on' : ''}" data-mode="${mode}" data-section="lyrics" role="switch" aria-checked="${lOn}"><span class="mpp-knob"></span></button>
             </label>
             <label class="mpp-row">
               <span>Videoclipes relacionados</span>
@@ -5304,7 +5330,7 @@ function renderProfile() {
     ? tastes.length + ' gênero(s): ' + escapeHtml(tastes.slice(0, 3).join(', ')) + (tastes.length > 3 ? '…' : '')
     : 'Nenhum gênero definido ainda';
   const subMetrics = Math.floor(totalTime / 3600) + 'h tocadas · ' + totalPlays + ' reproduções · ' + state.likedTracks.size + ' curtidas';
-  const subSettings = (AdShield.enabled() ? 'Proteção ativa' : 'Proteção desativada') + ' · ' + (autoVideoEnabled() ? 'Vídeo automático' : 'Sempre na capa') + ' · Takeout de dados';
+  const subSettings = (AdShield.enabled() ? 'Proteção ativa' : 'Proteção desativada') + ' · ' + (autoVideoEnabled() ? 'Vídeo automático' : 'Sempre na capa') + ' · ' + (lyricsOn ? 'Letra sincronizada' : 'Letra oculta') + ' · Takeout de dados';
 
   main.innerHTML = `
     <div class="section">
@@ -5502,6 +5528,18 @@ function renderProfile() {
     showToast(next
       ? 'Transição automática para vídeo ativada (7s)'
       : 'Transição automática desativada — o player fica na capa');
+  });
+
+  // ----- Configuracoes: toggle da letra sincronizada (modulo Lyrics) -----
+  const lyricsBtn = document.getElementById('lyrics-toggle');
+  if (lyricsBtn) lyricsBtn.addEventListener('click', () => {
+    if (typeof Lyrics === 'undefined') return;
+    const next = !Lyrics.enabled();
+    Lyrics.setEnabled(next); // persiste e mostra/oculta os containers na hora
+    renderProfile();
+    showToast(next
+      ? 'Letra da música ativada nos players'
+      : 'Letra da música oculta nos players');
   });
 
   // ----- Configuracoes: toggles de exibicao do player mobile -----
