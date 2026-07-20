@@ -41,6 +41,7 @@ const state = {
   playerMode: localStorage.getItem('vibefm_player_mode') || 'video', // 'video' | 'cover' | 'queue' 
   currentTrack: null,
   currentPlaylist: null,  // YouTube playlist ID
+  currentPlaylistName: null, // nome legivel da playlist em reproducao (ou null)
   isPlaying: false,
   currentTime: 0,
   duration: 0,
@@ -68,6 +69,7 @@ function saveLastTrack() {
       queue: state.queue,
       queueIndex: state.queueIndex,
       currentPlaylist: state.currentPlaylist,
+      currentPlaylistName: state.currentPlaylistName,
       currentTime: state.currentTime,
       savedAt: Date.now(),
     };
@@ -89,7 +91,19 @@ function clearLastTrack() {
 
 // ============================================
 // TRANSICAO AUTO: CAPA -> VIDEO (7s)
+// Preferencia do usuario (Perfil > Configuracoes): quando desligada, o
+// player permanece no modo capa e nao transiciona sozinho para o video.
 // ============================================
+const AUTO_VIDEO_KEY = 'minstream_auto_video';
+
+function autoVideoEnabled() {
+  try { return localStorage.getItem(AUTO_VIDEO_KEY) !== '0'; } catch (_) { return true; }
+}
+
+function setAutoVideoEnabled(on) {
+  try { localStorage.setItem(AUTO_VIDEO_KEY, on ? '1' : '0'); } catch (_) {}
+}
+
 let autoVideoTimer = null;
 
 function startAutoVideoTimer() {
@@ -100,6 +114,8 @@ function startAutoVideoTimer() {
   }
   // Inicia sempre no modo capa
   setPlayerMode('cover');
+  // Preferencia do usuario: sem transicao automatica, fica na capa
+  if (!autoVideoEnabled()) return;
   // Apos 7 segundos, transiciona para video
   autoVideoTimer = setTimeout(() => {
     autoVideoTimer = null;
@@ -213,6 +229,16 @@ async function playFromUrl(url) {
 
   state.currentTrack = track;
   state.currentPlaylist = playlistId || null;
+  state.currentPlaylistName = null;
+  // Busca o nome da playlist do YouTube em segundo plano (para o cabecalho)
+  if (playlistId) {
+    fetchPlaylistMeta(playlistId).then(meta => {
+      if (meta && meta.title && state.currentPlaylist === playlistId) {
+        state.currentPlaylistName = meta.title;
+        updateExpandedContext();
+      }
+    }).catch(() => {});
+  }
   state.isPlaying = true;
   state.currentTime = 0;
   state.queue = [track];
@@ -571,7 +597,16 @@ document.addEventListener('visibilitychange', () => {
 // ============================================
 const expandedPlayer = document.getElementById('expanded-player');
 const expStage = document.getElementById('exp-stage');
+// Player mobile isolado (usado so em telas pequenas)
+const mobilePlayer = document.getElementById('mobile-player');
+const mpStage = document.getElementById('mp-stage');
 let isExpanded = false;
+let expandedIsMobile = false; // qual player esta aberto (mobile x desktop)
+
+// Limiar unico para decidir qual player usar (bate com o @media 768px do CSS)
+function isMobileView() {
+  return window.matchMedia('(max-width: 768px)').matches;
+}
 
 // Modos de visualizacao do player expandido:
 //  'video' -> exibe o video em execucao
@@ -590,6 +625,17 @@ function setPlayerMode(mode) {
     tab.classList.toggle('active', tab.dataset.mode === mode);
   });
   expandedPlayer.dataset.mode = mode;
+  // Espelha no player mobile (abas + atributo de modo)
+  if (mobilePlayer) {
+    mobilePlayer.dataset.mode = mode;
+    mobilePlayer.querySelectorAll('.mp-tab[data-mode]').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.mode === mode);
+    });
+  }
+  // Espelha o modo no body (usado pelo CSS de paisagem/imersão)
+  if (expandedIsMobile) {
+    try { document.body.setAttribute('data-mp-mode', mode); } catch (_) {}
+  }
 
   // No modo capa, a capa estatica cobre o video tambem no dock
   applyPlayerModeToDock();
@@ -605,7 +651,31 @@ function setPlayerMode(mode) {
   }
 
   if (mode === 'cover') fillExpandedCover();
-  if (mode === 'queue') buildExpandedQueue(true);
+  if (mode === 'queue') { buildExpandedQueue(true); if (expandedIsMobile) buildMobileQueue(true); }
+  // Aplica as preferencias de visibilidade (relacionados / controles) do
+  // player mobile conforme o modo atual.
+  if (expandedIsMobile) applyMobilePlayerPrefs();
+}
+
+// Mostra/esconde "Videoclipes relacionados" e os controles do player no
+// player mobile, conforme as preferencias do usuario para o modo atual.
+function applyMobilePlayerPrefs() {
+  if (!mobilePlayer) return;
+  const mode = mobilePlayer.dataset.mode || 'cover';
+  const showRelated = MobilePlayerPrefs.isVisible(mode, 'related');
+  const showTransport = MobilePlayerPrefs.isVisible(mode, 'transport');
+
+  const related = document.getElementById('mp-related');
+  // Bloco de controles = info+curtir, progresso, transporte e rodape
+  const controlEls = [
+    mobilePlayer.querySelector('.mp-meta-row'),
+    mobilePlayer.querySelector('.mp-progress'),
+    mobilePlayer.querySelector('.mp-controls'),
+    mobilePlayer.querySelector('.mp-footer'),
+  ];
+
+  if (related) related.classList.toggle('mp-hidden-pref', !showRelated);
+  controlEls.forEach(el => { if (el) el.classList.toggle('mp-hidden-pref', !showTransport); });
 }
 
 function applyPlayerModeToDock() {
@@ -649,8 +719,29 @@ function stopSyncLoop() {
   }
 }
 
+// Palco ativo: o .exp-stage (desktop) ou o #mp-stage (mobile). O vídeo
+// compartilhado (#video-cover) e posicionado sobre este elemento.
+function activeStageEl() {
+  return (isExpanded && expandedIsMobile) ? mpStage : expStage;
+}
+
 function _doSync() {
-  const r = expStage.getBoundingClientRect();
+  // Em paisagem, no player mobile modo vídeo, o CSS assume o fullscreen
+  // (100dvw/100dvh sob o notch). Não sobrescrevemos os estilos inline.
+  if (isExpanded && expandedIsMobile && state.playerMode === 'video' &&
+      window.matchMedia('(orientation: landscape)').matches) {
+    // Limpa qualquer posicao inline remanescente para o CSS reger sozinho
+    if (videoCover.style.left || videoCover.style.width) {
+      videoCover.style.left = '';
+      videoCover.style.top = '';
+      videoCover.style.width = '';
+      videoCover.style.height = '';
+    }
+    return;
+  }
+  const stage = activeStageEl();
+  if (!stage) return;
+  const r = stage.getBoundingClientRect();
   videoCover.style.left = r.left + 'px';
   videoCover.style.top = r.top + 'px';
   videoCover.style.width = r.width + 'px';
@@ -676,7 +767,8 @@ function syncVideoToStage() {
 const SCROLL_FADE_THRESHOLD = 150; // px de scroll para opacidade minima
 function updateVideoOpacityOnScroll() {
   if (!isExpanded || state.playerMode !== 'video') return;
-  const st = expandedPlayer.scrollTop;
+  const host = expandedIsMobile ? mobilePlayer : expandedPlayer;
+  const st = host ? host.scrollTop : 0;
   const opacity = Math.max(0, 1 - (st / SCROLL_FADE_THRESHOLD));
   videoCover.style.opacity = String(opacity);
 }
@@ -688,7 +780,25 @@ function resetVideoOpacity() {
 let resizeDebounce;
 window.addEventListener('resize', () => {
   clearTimeout(resizeDebounce);
-  resizeDebounce = setTimeout(syncVideoToStage, 100);
+  resizeDebounce = setTimeout(() => {
+    // Se o player esta aberto e a tela cruzou o limiar mobile/desktop,
+    // troca para o player correto (reabre no formato adequado).
+    if (isExpanded && isMobileView() !== expandedIsMobile) {
+      closeExpanded();
+      openExpanded();
+    } else {
+      syncVideoToStage();
+    }
+  }, 120);
+});
+
+// Mudanca de orientacao: em paisagem o CSS assume o video (fullscreen);
+// ao voltar a retrato, o _doSync reposiciona sobre o palco. Reagimos aos
+// dois sentidos reaplicando a sincronizacao apos o reflow.
+window.addEventListener('orientationchange', () => {
+  setTimeout(() => {
+    if (isExpanded && state.playerMode === 'video') syncVideoToStage();
+  }, 250);
 });
 // O loop de sincronizacao (rAF) ja reposiciona o video a cada frame no modo
 // video; no scroll basta atualizar a opacidade. Evita re-toggle de classes e
@@ -697,12 +807,20 @@ expandedPlayer.addEventListener('scroll', () => {
   updateVideoOpacityOnScroll();
 }, { passive: true });
 
-// ResizeObserver no .exp-stage detecta mudancas de tamanho em tempo real
+// Scroll do player mobile: mesma logica de opacidade do video
+if (mobilePlayer) {
+  mobilePlayer.addEventListener('scroll', () => {
+    updateVideoOpacityOnScroll();
+  }, { passive: true });
+}
+
+// ResizeObserver nos palcos (desktop e mobile) detecta mudancas de tamanho
 if (typeof ResizeObserver !== 'undefined') {
   syncObserver = new ResizeObserver(() => {
     if (isExpanded && state.playerMode === 'video') _doSync();
   });
   syncObserver.observe(expStage);
+  if (mpStage) syncObserver.observe(mpStage);
 }
 
 function fillExpandedCover() {
@@ -714,13 +832,20 @@ function fillExpandedCover() {
     img.src = '';
     infoTitle.textContent = 'Nada tocando';
     infoArtist.textContent = '';
+    try { document.body.style.setProperty('--exp-bg', 'none'); } catch (_) {}
     return;
   }
   img.src = t.videoId
     ? 'https://i.ytimg.com/vi/' + t.videoId + '/hqdefault.jpg'
     : (t.cover || '');
+  // Fundo do player expandido (mobile): a capa em tela cheia com gradiente
+  try {
+    document.body.style.setProperty('--exp-bg', img.src ? 'url("' + img.src + '")' : 'none');
+  } catch (_) {}
   infoTitle.textContent = t.title || '';
   infoArtist.textContent = t.artist || '';
+  // Espelha capa/fundo no player mobile
+  if (expandedIsMobile) updateMobileMeta();
 }
 
 // Toggle do painel de informacoes no modo capa
@@ -820,28 +945,126 @@ function makeQueueLi(cfg) {
 
 function openExpanded() {
   isExpanded = true;
+  expandedIsMobile = isMobileView();
   document.body.classList.add('theater-open');
-  expandedPlayer.classList.add('open');
-  setPlayerMode(state.playerMode || 'video');
+  document.body.classList.toggle('mobile-theater', expandedIsMobile);
+  // Abre apenas o player correspondente ao tamanho de tela
+  if (expandedIsMobile) {
+    mobilePlayer.classList.add('open');
+    // Mobile abre focado na capa (o video continua a um toque na aba)
+    setPlayerMode(state.playerMode || 'cover');
+    updateMobileMeta();
+  } else {
+    expandedPlayer.classList.add('open');
+    setPlayerMode(state.playerMode || 'video');
+  }
   updateExpandedContext();
   loadRelatedVideos();
   // Inicia o loop de sincronização do vídeo com o palco
   if (state.playerMode === 'video') startSyncLoop();
 }
 
+// Atualiza título/artista/capa/curtida do player mobile a partir do estado
+function updateMobileMeta() {
+  if (!isExpanded || !expandedIsMobile) return;
+  const t = state.currentTrack;
+  const titleEl = document.getElementById('mp-title');
+  const artistEl = document.getElementById('mp-artist');
+  const coverEl = document.getElementById('mp-cover-img');
+  const likeBtn = document.getElementById('mp-like');
+  if (titleEl) titleEl.textContent = t ? (t.title || '') : '';
+  if (artistEl) artistEl.textContent = t ? (t.artist || '') : '';
+  if (coverEl) {
+    coverEl.src = t
+      ? (t.videoId ? 'https://i.ytimg.com/vi/' + t.videoId + '/hqdefault.jpg' : (t.cover || ''))
+      : '';
+  }
+  // Fundo do player mobile (mesma capa, borrada via CSS)
+  try {
+    document.body.style.setProperty('--mp-bg', (coverEl && coverEl.src) ? 'url("' + coverEl.src + '")' : 'none');
+  } catch (_) {}
+  if (likeBtn && t) likeBtn.classList.toggle('active', state.likedTracks.has(t.id));
+}
+
+// Fila do player mobile (reusa makeQueueLi; mesma logica do desktop)
+let mpQueueKey = '';
+function buildMobileQueue(force) {
+  const ul = document.getElementById('mp-queue-items');
+  if (!ul) return;
+  const isYt = !!(state.currentPlaylist && ytQueue.length);
+  const key = isYt
+    ? 'yt:' + ytQueue.join(',') + '#' + ytQueueIndex
+    : 'lc:' + state.queue.map(t => t.id).join(',') + '#' + state.queueIndex;
+  if (!force && key === mpQueueKey) return;
+  mpQueueKey = key;
+
+  const frag = document.createDocumentFragment();
+  if (isYt) {
+    ytQueue.forEach((vid, i) => {
+      frag.appendChild(makeQueueLi({
+        cover: 'https://i.ytimg.com/vi/' + vid + '/mqdefault.jpg',
+        title: titleCache.get(vid) || ('Faixa ' + (i + 1)),
+        artist: channelCache.get(vid) || '',
+        active: i === ytQueueIndex,
+        onClick: () => { if (ytPlayer && state.apiReady) { try { ytPlayer.playVideoAt(i); } catch (_) {} } },
+      }));
+    });
+  } else {
+    state.queue.forEach((track, i) => {
+      frag.appendChild(makeQueueLi({
+        cover: track.videoId ? 'https://i.ytimg.com/vi/' + track.videoId + '/mqdefault.jpg' : track.cover,
+        title: track.title,
+        artist: track.artist,
+        active: i === state.queueIndex,
+        onClick: () => {
+          state.queueIndex = i;
+          state.currentTrack = state.queue[i];
+          state.currentTime = 0;
+          state.isPlaying = true;
+          loadTrack(state.currentTrack);
+          updatePlayerUI();
+        },
+      }));
+    });
+  }
+  if (!frag.childNodes.length) {
+    const p = document.createElement('p');
+    p.className = 'pl-acc-empty';
+    p.textContent = 'A fila está vazia. Toque algo para começar.';
+    frag.appendChild(p);
+  }
+  ul.replaceChildren(frag);
+  const active = ul.querySelector('.queue-item.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
 let lastRelatedArtist = null;
 let relatedToken = 0;
 
 function updateExpandedContext() {
-  const ctx = document.getElementById('exp-context');
   const t = state.currentTrack;
-  ctx.textContent = t ? (t.title || 'Tocando agora') : 'Tocando agora';
+  // Desktop: mantem o comportamento atual (nome da faixa)
+  const ctx = document.getElementById('exp-context');
+  if (ctx) ctx.textContent = t ? (t.title || 'Tocando agora') : 'Tocando agora';
+
+  // Mobile: cabecalho mostra o NOME DA PLAYLIST em reproducao; se nao for
+  // uma playlist, mostra "Tocando agora". O rotulo superior tambem muda.
+  const mpCtx = document.getElementById('mp-context-name');
+  const mpLabel = document.querySelector('#mobile-player .mp-context-label');
+  // E playlist se ha nome (playlists do usuario/YT) OU se ha um ID de
+  // playlist do YouTube cujo nome ainda esta sendo buscado.
+  const isList = !!(state.currentPlaylistName || state.currentPlaylist);
+  const plName = state.currentPlaylistName || (state.currentPlaylist ? 'Playlist do YouTube' : null);
+  if (mpCtx) mpCtx.textContent = isList ? plName : 'Tocando agora';
+  if (mpLabel) mpLabel.textContent = isList ? 'TOCANDO DA PLAYLIST' : 'TOCANDO AGORA';
 }
 
 async function loadRelatedVideos() {
   const t = state.currentTrack;
-  const row = document.getElementById('exp-related-row');
-  const wrap = document.getElementById('exp-related');
+  // Preenche o player ativo: mobile usa #mp-related, desktop usa #exp-related
+  const row = document.getElementById(expandedIsMobile ? 'mp-related-row' : 'exp-related-row');
+  const wrap = document.getElementById(expandedIsMobile ? 'mp-related' : 'exp-related');
+  if (!row || !wrap) return;
   if (!t || !t.artist) { wrap.classList.add('hidden'); return; }
   if (t.artist === lastRelatedArtist && row.children.length) { wrap.classList.remove('hidden'); return; }
   lastRelatedArtist = t.artist;
@@ -870,12 +1093,17 @@ async function loadRelatedVideos() {
     card.addEventListener('click', () => playYouTubeResult(r, filtered));
     row.appendChild(card);
   });
+  // Respeita a preferencia de visibilidade do usuario (mobile)
+  if (expandedIsMobile) applyMobilePlayerPrefs();
 }
 
 function closeExpanded() {
   isExpanded = false;
-  document.body.classList.remove('theater-open');
+  document.body.classList.remove('theater-open', 'mobile-theater');
+  document.body.removeAttribute('data-mp-mode');
   expandedPlayer.classList.remove('open');
+  if (mobilePlayer) mobilePlayer.classList.remove('open');
+  expandedIsMobile = false;
   stopSyncLoop();
   resetVideoOpacity();
   syncVideoToStage();
@@ -900,6 +1128,61 @@ document.getElementById('exp-close').addEventListener('click', closeExpanded);
 document.querySelectorAll('.exp-tab[data-mode]').forEach(tab => {
   tab.addEventListener('click', () => setPlayerMode(tab.dataset.mode));
 });
+
+// ============================================
+// PLAYER MOBILE — listeners (reusam as mesmas acoes do dock)
+// ============================================
+if (mobilePlayer) {
+  document.getElementById('mp-close').addEventListener('click', closeExpanded);
+  mobilePlayer.querySelectorAll('.mp-tab[data-mode]').forEach(tab => {
+    tab.addEventListener('click', () => setPlayerMode(tab.dataset.mode));
+  });
+  document.getElementById('mp-play').addEventListener('click', togglePlay);
+  document.getElementById('mp-next').addEventListener('click', nextTrack);
+  document.getElementById('mp-prev').addEventListener('click', prevTrack);
+  document.getElementById('mp-shuffle').addEventListener('click', toggleShuffle);
+  document.getElementById('mp-repeat').addEventListener('click', cycleRepeat);
+  document.getElementById('mp-like').addEventListener('click', () => {
+    if (state.currentTrack) { toggleLike(state.currentTrack.id); updateMobileMeta(); }
+  });
+  document.getElementById('mp-tv').addEventListener('click', toggleTvMode);
+  const mpShare = document.getElementById('mp-share');
+  if (mpShare) mpShare.addEventListener('click', () => {
+    const t = state.currentTrack;
+    if (!t) return;
+    const url = t.videoId ? 'https://youtu.be/' + t.videoId : '';
+    if (navigator.share && url) navigator.share({ title: t.title || 'MinStream', url }).catch(() => {});
+    else if (url && navigator.clipboard) { navigator.clipboard.writeText(url); showToast('Link copiado'); }
+  });
+
+  // Scrub na barra de progresso do player mobile
+  setupMobileScrub();
+}
+
+// Barra de progresso do player mobile: toque e arraste para buscar.
+function setupMobileScrub() {
+  const bar = document.getElementById('mp-progress-bar');
+  if (!bar) return;
+  let dragging = false;
+  function pctFromEvent(e) {
+    const rect = bar.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return Math.max(0, Math.min(1, x / rect.width));
+  }
+  function preview(pct) {
+    const fill = document.getElementById('mp-progress-fill');
+    const handle = document.getElementById('mp-progress-handle');
+    if (fill) fill.style.width = (pct * 100) + '%';
+    if (handle) handle.style.left = (pct * 100) + '%';
+  }
+  function commit(pct) {
+    if (state.duration > 0) seekToTime(pct * state.duration);
+  }
+  bar.addEventListener('touchstart', (e) => { dragging = true; preview(pctFromEvent(e)); }, { passive: true });
+  bar.addEventListener('touchmove', (e) => { if (dragging) { preview(pctFromEvent(e)); e.preventDefault(); } }, { passive: false });
+  bar.addEventListener('touchend', (e) => { if (dragging) { dragging = false; commit(pctFromEvent(e.changedTouches ? { touches: e.changedTouches } : e)); } });
+  bar.addEventListener('click', (e) => commit(pctFromEvent(e)));
+}
 // Aplica a preferencia de modo (capa estatica x video) ja no dock
 applyPlayerModeToDock();
 
@@ -938,6 +1221,60 @@ async function fetchOembed(videoId) {
     titleCache.set(videoId, null);
     channelCache.set(videoId, null);
   }
+}
+
+// Metadados de playlist (titulo + capa) para os cartoes de links salvos.
+// Ordem: oEmbed oficial do YouTube (mesmo endpoint dos videos) ->
+// Piped /playlists/{id} -> Invidious /api/v1/playlists/{id}.
+const playlistMetaCache = new Map(); // listId -> { title, cover } | null
+
+async function fetchPlaylistMeta(listId) {
+  if (playlistMetaCache.has(listId)) return playlistMetaCache.get(listId);
+  // 1) oEmbed do YouTube (leve, sem key)
+  try {
+    const url = 'https://www.youtube.com/oembed?format=json&url=' +
+      encodeURIComponent('https://www.youtube.com/playlist?list=' + listId);
+    const res = await fetchWithTimeout(url, 4500);
+    if (res.ok) {
+      const json = await res.json();
+      if (json && (json.title || json.thumbnail_url)) {
+        const meta = { title: json.title || null, cover: json.thumbnail_url || null };
+        playlistMetaCache.set(listId, meta);
+        return meta;
+      }
+    }
+  } catch (_) {}
+  // 2) Instancias publicas (mesmas fontes da busca)
+  for (const src of YT_SEARCH_SOURCES) {
+    try {
+      const url = src.kind === 'piped'
+        ? src.base + '/playlists/' + encodeURIComponent(listId)
+        : src.base + '/api/v1/playlists/' + encodeURIComponent(listId);
+      const res = await fetchWithTimeout(url, 4500);
+      if (!res.ok) continue;
+      const data = await res.json();
+      let title = null, cover = null;
+      if (src.kind === 'piped') {
+        title = (data && data.name) || null;
+        cover = (data && data.thumbnailUrl) || null;
+        if (!cover && data && Array.isArray(data.relatedStreams) && data.relatedStreams[0]) {
+          const vid = extractVideoId(data.relatedStreams[0].url || '');
+          if (vid) cover = 'https://i.ytimg.com/vi/' + vid + '/mqdefault.jpg';
+        }
+      } else {
+        title = (data && data.title) || null;
+        const v0 = data && Array.isArray(data.videos) && data.videos[0];
+        if (v0 && v0.videoId) cover = 'https://i.ytimg.com/vi/' + v0.videoId + '/mqdefault.jpg';
+      }
+      if (title || cover) {
+        const meta = { title, cover };
+        playlistMetaCache.set(listId, meta);
+        return meta;
+      }
+    } catch (_) { /* tenta a proxima instancia */ }
+  }
+  playlistMetaCache.set(listId, null);
+  return null;
 }
 
 async function populateQueueMetadata() {
@@ -1215,10 +1552,11 @@ function loadTrack(track) {
   doLoad(track);
 }
 
-function playTrack(track, tracks) {
+function playTrack(track, tracks, playlistName) {
   if (!track) return;
   state.currentTrack = track;
   state.currentPlaylist = null;  // local track, not a YT playlist
+  state.currentPlaylistName = playlistName || null;
   state.isPlaying = true;
   state.currentTime = 0;
 
@@ -1455,6 +1793,14 @@ const Gallery = (function () {
     if (it && !it.title) { it.title = title; persist(items); }
   }
 
+  // Persiste a capa descoberta (miniatura de playlist via metadados)
+  function updateCover(key, cover) {
+    if (!cover) return;
+    const items = load();
+    const it = items.find((i) => keyOf(i) === key);
+    if (it && !it.cover) { it.cover = cover; persist(items); }
+  }
+
   // ----- Fixar (pin) itens escolhidos pelo usuario -----
   const PINNED_KEY = 'vibefm_gallery_pinned';
   function loadPinned() {
@@ -1512,7 +1858,7 @@ const Gallery = (function () {
     return loadSorted().filter((it) => !hidden.has(keyOf(it)));
   }
 
-  return { load, save, remove, keyOf, watchUrlOf, updateTitle, isPinned, togglePin, loadSorted, hideFromHome, unhideFromHome, isHiddenFromHome, loadHomeHidden, loadSortedForHome };
+  return { load, save, remove, keyOf, watchUrlOf, updateTitle, updateCover, isPinned, togglePin, loadSorted, hideFromHome, unhideFromHome, isHiddenFromHome, loadHomeHidden, loadSortedForHome };
 })();
 
 // ============================================
@@ -1547,6 +1893,61 @@ const ytSearchCache = new Map();
 // Nao altera a logica de negocio: e um filtro puro sobre listas ja
 // existentes + configuracao de player.
 // ============================================
+// ============================================
+// PREFERENCIAS DO PLAYER MOBILE
+// O usuario personaliza, por modo (video/capa/fila), se aparecem:
+//  - a secao "Videoclipes relacionados" (related)
+//  - os "controles do player" (transport: progresso + botoes)
+// Persistido em localStorage; padrao = tudo visivel.
+// ============================================
+const MobilePlayerPrefs = (function () {
+  const KEY = 'minstream_mp_prefs';
+  const MODES = ['video', 'cover', 'queue'];
+  const SECTIONS = ['related', 'transport'];
+
+  function defaults() {
+    // Tudo visivel por padrao
+    const d = {};
+    MODES.forEach(m => { d[m] = { related: true, transport: true }; });
+    return d;
+  }
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (!raw) return defaults();
+      const parsed = JSON.parse(raw);
+      const base = defaults();
+      MODES.forEach(m => {
+        if (parsed && parsed[m]) {
+          SECTIONS.forEach(s => {
+            if (typeof parsed[m][s] === 'boolean') base[m][s] = parsed[m][s];
+          });
+        }
+      });
+      return base;
+    } catch (_) { return defaults(); }
+  }
+
+  function save(prefs) {
+    try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (_) {}
+  }
+
+  function isVisible(mode, section) {
+    const p = load();
+    return !!(p[mode] && p[mode][section]);
+  }
+
+  function setVisible(mode, section, visible) {
+    const p = load();
+    if (!p[mode]) p[mode] = { related: true, transport: true };
+    p[mode][section] = !!visible;
+    save(p);
+  }
+
+  return { load, save, isVisible, setVisible, MODES, SECTIONS };
+})();
+
 const AdShield = (function () {
   const ENABLED_KEY = 'vibefm_adshield';
   const STATS_KEY = 'vibefm_adshield_stats';
@@ -1694,34 +2095,92 @@ function getYtSearchSort() {
   return ytSearchSort;
 }
 
-async function searchYouTube(query) {
+// Ordenacao local dos resultados conforme o filtro escolhido.
+// Garante o resultado certo mesmo quando a instancia ignora o
+// parametro de sort do servidor (o Piped nao suporta sort na busca).
+//   'plays'     -> comportamento legado (rankByPlays): usado pelos fluxos
+//                  internos (mixes, novidades, relacionados, tendencias)
+//   'relevance' -> preserva a ordem de relevancia devolvida pela API
+//   'views'     -> mais visualizados primeiro (ordenacao local, estavel)
+//   'date'      -> mais recentes primeiro (timestamp `published`; itens
+//                  sem data vao para o fim, na ordem original)
+function applySearchSort(items, sort) {
+  if (!Array.isArray(items)) return items;
+  if (sort === 'views') {
+    return items
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => ((b.it.views || 0) - (a.it.views || 0)) || (a.i - b.i))
+      .map(x => x.it);
+  }
+  if (sort === 'date') {
+    return items
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => ((b.it.published || 0) - (a.it.published || 0)) || (a.i - b.i))
+      .map(x => x.it);
+  }
+  if (sort === 'relevance') return items.slice();
+  return rankByPlays(items); // 'plays' (padrao interno)
+}
+
+// Busca uma pagina numa instancia. Piped devolve { items, nextpage };
+// Invidious pagina por numero. Retorna { raw, nextpage }.
+async function fetchSearchPage(src, q, sort, page, nextpage) {
+  let url;
+  if (src.kind === 'piped') {
+    url = (page > 1 && nextpage)
+      ? src.base + '/nextpage/search?nextpage=' + encodeURIComponent(nextpage) +
+        '&q=' + encodeURIComponent(q) + '&filter=videos'
+      : src.base + '/search?q=' + encodeURIComponent(q) + '&filter=videos';
+    // Piped nao suporta sort na busca; a ordenacao e feita localmente.
+  } else {
+    url = src.base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=video&page=' + page;
+    // Nomes corretos da API do Invidious (sort_by=...):
+    if (sort === 'views') url += '&sort_by=view_count';
+    else if (sort === 'date') url += '&sort_by=upload_date';
+    else url += '&sort_by=relevance';
+  }
+  const res = await fetchWithTimeout(url, 4500);
+  if (!res.ok) throw new Error('http ' + res.status);
+  const data = await res.json();
+  if (src.kind === 'piped') {
+    return { raw: normalizePiped(data && data.items), nextpage: (data && data.nextpage) || null };
+  }
+  return { raw: normalizeInvidious(data), nextpage: null };
+}
+
+// opts.sort: quando informado (busca da UI), respeita o filtro escolhido
+// e pagina (2 paginas) para cobrir mais faixas do artista. Sem opts, o
+// comportamento legado e mantido (1 pagina, ranking por reproducoes) —
+// e o caminho dos mixes, novidades, relacionados etc., que assim nao
+// sao afetados pelo filtro escolhido na tela de busca.
+async function searchYouTube(query, opts) {
   const q = query.trim();
-  const cacheKey = q + '|sort=' + ytSearchSort;
+  const sort = (opts && opts.sort) || 'plays';
+  const maxPages = (opts && opts.sort) ? 2 : 1;
+  const cap = (opts && opts.sort) ? 30 : 12;
+  const cacheKey = q + '|sort=' + sort;
   if (ytSearchCache.has(cacheKey)) return ytSearchCache.get(cacheKey);
 
   for (const src of YT_SEARCH_SOURCES) {
     try {
-      let url;
-      if (src.kind === 'piped') {
-        url = src.base + '/search?q=' + encodeURIComponent(q) + '&filter=videos';
-        if (ytSearchSort === 'views') url += '&sort_by=views';
-        else if (ytSearchSort === 'date') url += '&sort_by=date';
-      } else {
-        url = src.base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=video';
-        if (ytSearchSort === 'views') url += '&sort=views';
-        else if (ytSearchSort === 'date') url += '&sort=date';
+      const seen = new Set();
+      const collected = [];
+      let nextpage = null;
+      for (let page = 1; page <= maxPages; page++) {
+        let out;
+        try { out = await fetchSearchPage(src, q, sort, page, nextpage); }
+        catch (_) { break; } // pagina extra falhou: segue com o que ja tem
+        nextpage = out.nextpage;
+        out.raw.forEach(it => {
+          if (!seen.has(it.videoId)) { seen.add(it.videoId); collected.push(it); }
+        });
+        if (src.kind === 'piped' && !nextpage) break; // sem mais paginas
+        if (!out.raw.length) break;
       }
-      const res = await fetchWithTimeout(url, 4500);
-      if (!res.ok) continue;
-      const data = await res.json();
-      const raw = src.kind === 'piped'
-        ? normalizePiped(data && data.items)
-        : normalizeInvidious(data);
       // Mecanismo sem anuncios: filtra promocoes/patrocinados na origem.
-      const items = AdShield.filter(raw);
+      const items = AdShield.filter(collected);
       if (items.length) {
-        // Acuracia: os mais reproduzidos primeiro (relevancia por views)
-        const top = rankByPlays(items).slice(0, 12);
+        const top = applySearchSort(items, sort).slice(0, cap);
         ytSearchCache.set(cacheKey, top);
         return top;
       }
@@ -2657,24 +3116,107 @@ const Takeout = (function () {
     return data;
   }
 
-  // Gera e baixa o arquivo minstream-takeout-AAAA-MM-DD.json
-  function download() {
-    const payload = {
+  // Gera e entrega o arquivo minstream-takeout-AAAA-MM-DD.json.
+  // No navegador, baixa via <a download>. Dentro do app (WebView do
+  // Capacitor) esse caminho falha silenciosamente, entao a entrega segue
+  // uma cadeia de alternativas ate uma funcionar:
+  //   1. Plugins nativos do Capacitor (Filesystem/Share), se instalados;
+  //   2. Web Share API com arquivo (compartilhar para Arquivos, Drive...);
+  //   3. <a download> classico (navegadores);
+  //   4. Copia o JSON para a area de transferencia (sempre disponivel).
+  function buildPayload() {
+    return {
       app: 'MinStream',
       kind: 'takeout',
       version: 1,
       exportedAt: new Date().toISOString(),
       data: collect(),
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'minstream-takeout-' + new Date().toISOString().slice(0, 10) + '.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    showToast('Takeout gerado: seus dados foram baixados em .json');
+  }
+
+  function isNativeApp() {
+    try {
+      return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function'
+        && window.Capacitor.isNativePlatform());
+    } catch (_) { return false; }
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) {}
+    // Fallback legado
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (_) { return false; }
+  }
+
+  async function download() {
+    const json = JSON.stringify(buildPayload(), null, 2);
+    const fname = 'minstream-takeout-' + new Date().toISOString().slice(0, 10) + '.json';
+    const native = isNativeApp();
+
+    // 1) Plugins nativos do Capacitor, quando presentes no APK
+    if (native && window.Capacitor.Plugins) {
+      const P = window.Capacitor.Plugins;
+      if (P.Filesystem && P.Filesystem.writeFile) {
+        try {
+          await P.Filesystem.writeFile({ path: fname, data: json, directory: 'DOCUMENTS', encoding: 'utf8' });
+          if (P.Share && P.Share.share && P.Filesystem.getUri) {
+            try {
+              const uri = await P.Filesystem.getUri({ path: fname, directory: 'DOCUMENTS' });
+              await P.Share.share({ title: fname, url: uri.uri, dialogTitle: 'Salvar takeout' });
+            } catch (_) { /* usuario cancelou o share: arquivo ja esta salvo */ }
+          }
+          showToast('Takeout salvo em Documentos: ' + fname);
+          return;
+        } catch (_) { /* segue para a proxima alternativa */ }
+      }
+    }
+
+    // 2) Web Share API com arquivo (abre a folha de compartilhamento)
+    try {
+      if (navigator.canShare && typeof File === 'function') {
+        const file = new File([json], fname, { type: 'application/json' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: fname });
+          showToast('Takeout compartilhado — salve o arquivo onde preferir');
+          return;
+        }
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // usuario cancelou: nao insistir
+    }
+
+    // 3) Download classico (navegadores)
+    if (!native) {
+      const blob = new Blob([json], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showToast('Takeout gerado: seus dados foram baixados em .json');
+      return;
+    }
+
+    // 4) Garantia final no app: area de transferencia
+    const copied = await copyToClipboard(json);
+    showToast(copied
+      ? 'Takeout copiado para a área de transferência — cole em um arquivo .json (Arquivos, Notas, Drive...)'
+      : 'Não foi possível exportar automaticamente. Tente novamente ou use a versão no navegador.');
   }
 
   // ---------- Mesclagem aditiva por chave ----------
@@ -3158,6 +3700,13 @@ function createGalleryCard(item, onChange, mode) {
     img.alt = '';
     img.loading = 'lazy'; img.decoding = 'async';
     coverWrap.appendChild(img);
+  } else if (item.cover) {
+    // Capa de playlist ja conhecida (persistida no item)
+    const img = document.createElement('img');
+    img.src = item.cover;
+    img.alt = '';
+    img.loading = 'lazy'; img.decoding = 'async';
+    coverWrap.appendChild(img);
   } else {
     const ph = document.createElement('div');
     ph.className = 'gallery-thumb-list';
@@ -3213,7 +3762,7 @@ function createGalleryCard(item, onChange, mode) {
   titleEl.textContent = item.title || (isPlaylist ? 'Playlist' : 'Vídeo');
   const sub = document.createElement('div');
   sub.className = 'album-artist';
-  sub.textContent = isPlaylist ? 'list=' + item.list.slice(0, 18) + (item.list.length > 18 ? '\u2026' : '') : 'youtu.be/' + item.id;
+  sub.textContent = isPlaylist ? 'Playlist \u00B7 YouTube' : 'youtu.be/' + item.id;
   info.appendChild(titleEl);
   info.appendChild(sub);
 
@@ -3226,6 +3775,27 @@ function createGalleryCard(item, onChange, mode) {
     fetchOembed(item.id).then(() => {
       const t = titleCache.get(item.id);
       if (t) { titleEl.textContent = t; Gallery.updateTitle(key, t); }
+    });
+  }
+
+  // Playlists: completa nome e capa via metadados (persistidos no item,
+  // entao nas proximas renderizacoes aparecem imediatamente)
+  if (item.list && (!item.title || (!item.id && !item.cover))) {
+    fetchPlaylistMeta(item.list).then(meta => {
+      if (!meta) return;
+      if (meta.title && !item.title) {
+        titleEl.textContent = meta.title;
+        Gallery.updateTitle(key, meta.title);
+      }
+      if (meta.cover && !item.id && !item.cover) {
+        const img = document.createElement('img');
+        img.src = meta.cover;
+        img.alt = '';
+        img.loading = 'lazy'; img.decoding = 'async';
+        const ph = coverWrap.querySelector('.gallery-thumb-list');
+        if (ph) ph.replaceWith(img);
+        Gallery.updateCover(key, meta.cover);
+      }
     });
   }
   return card;
@@ -3436,6 +4006,9 @@ function renderHome() {
   if (userCarousel) {
     // "Curtidas" sempre em primeiro
     userCarousel.appendChild(createPlaylistCard(likedPlaylistConfig()));
+    // Pasta "Recentes": aparece so quando ja houve reproducao
+    const recentFolder = createRecentFolderCard();
+    if (recentFolder) userCarousel.appendChild(recentFolder);
     userPls.forEach(pl => {
       const tracks = UserPlaylists.tracksOf(pl);
       const card = createPlaylistCard({
@@ -3585,6 +4158,76 @@ function attachCarouselArrows(prefix) {
 let renderHomeToken = 0;
 let lastExpandedCardId = null; // ultimo card expandido na Home
 
+// Card "Recentes" em "Suas Playlists" (Home): funciona como uma pasta
+// expandida, com uma grade 2x2 das capas dos ultimos 4 videos distintos
+// reproduzidos. Sem nada reproduzido, a pasta nao aparece (retorna null).
+// Clique -> abre a secao "Recentes" da Biblioteca.
+function createRecentFolderCard() {
+  // Ultimas reproducoes distintas (por faixa), mais recentes primeiro
+  const seen = new Set();
+  const lastPlays = [];
+  for (const h of state.history) {
+    const k = h.videoId || h.trackId;
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    lastPlays.push(h);
+    if (lastPlays.length === 4) break;
+  }
+  if (!lastPlays.length) return null; // nada reproduzido: pasta oculta
+
+  const card = document.createElement('div');
+  card.className = 'album-card recent-folder-card';
+  card.title = 'Abrir Recentes na Biblioteca';
+
+  const coverWrap = document.createElement('div');
+  coverWrap.className = 'album-cover-wrap';
+
+  const grid = document.createElement('div');
+  grid.className = 'folder-cover-grid';
+  for (let i = 0; i < 4; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'folder-cover-cell';
+    const h = lastPlays[i];
+    if (h) {
+      const t = getTrack(h.trackId);
+      const src = h.videoId
+        ? 'https://i.ytimg.com/vi/' + h.videoId + '/mqdefault.jpg'
+        : (t && t.cover) || '';
+      if (src) {
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = '';
+        img.loading = 'lazy'; img.decoding = 'async';
+        cell.appendChild(img);
+      }
+    }
+    grid.appendChild(cell);
+  }
+  coverWrap.appendChild(grid);
+
+  // Selo de pasta no canto (indica que abre uma secao, nao toca direto)
+  const badge = document.createElement('span');
+  badge.className = 'folder-badge';
+  badge.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke-linejoin="round"/></svg>';
+  coverWrap.appendChild(badge);
+
+  const info = document.createElement('div');
+  info.className = 'album-info';
+  const titleEl = document.createElement('div');
+  titleEl.className = 'album-title';
+  titleEl.textContent = 'Recentes';
+  const sub = document.createElement('div');
+  sub.className = 'album-artist';
+  sub.textContent = state.history.length + ' tocada(s) \u00B7 pasta';
+  info.appendChild(titleEl);
+  info.appendChild(sub);
+
+  card.appendChild(coverWrap);
+  card.appendChild(info);
+  card.addEventListener('click', () => setView('recent'));
+  return card;
+}
+
 // Cria um card de playlist estilo album-card para a Home
 function createPlaylistCard(cfg) {
   const card = document.createElement('div');
@@ -3649,7 +4292,7 @@ function createPlaylistCard(cfg) {
   // Play ao clicar no botao de play
   overlay.querySelector('.album-play-btn').addEventListener('click', (e) => {
     e.stopPropagation();
-    if (cfg.tracks.length) playTrack(cfg.tracks[0], cfg.tracks);
+    if (cfg.tracks.length) playTrack(cfg.tracks[0], cfg.tracks, cfg.name);
   });
 
   // Expandir ao clicar no card (exceto no botao play/delete)
@@ -3798,7 +4441,7 @@ function playlistAccordionItem(cfg) {
   playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
   playBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (cfg.tracks.length) playTrack(cfg.tracks[0], cfg.tracks);
+    if (cfg.tracks.length) playTrack(cfg.tracks[0], cfg.tracks, cfg.name);
   });
 
   header.appendChild(cover);
@@ -4111,12 +4754,10 @@ async function performSearch(raw) {
           if (sort === ytSearchSort) return;
           setYtSearchSort(sort);
           buttons.forEach(b => b.classList.toggle('active', b.dataset.sort === sort));
-          // Refaz a busca com o novo filtro
+          // Refaz a busca com o novo filtro (o cache e por consulta+filtro,
+          // entao voltar a um filtro ja visto e instantaneo)
           const currentQuery = globalSearchInput.value.trim();
-          if (currentQuery) {
-            ytSearchCache.clear();
-            performSearch(currentQuery);
-          }
+          if (currentQuery) performSearch(currentQuery);
         });
       });
     }
@@ -4125,7 +4766,7 @@ async function performSearch(raw) {
     if (ytSearchDebounce) clearTimeout(ytSearchDebounce);
     const myToken = ++ytSearchToken;
     ytSearchDebounce = setTimeout(async () => {
-      const results = await searchYouTube(raw);
+      const results = await searchYouTube(raw, { sort: ytSearchSort });
       if (myToken !== ytSearchToken) return; // busca obsoleta
       const container = document.getElementById('yt-search-results');
       if (!container) return;
@@ -4597,6 +5238,45 @@ function renderProfile() {
     </div>
 
     <div class="psec-block">
+      <h4 class="psec-subtitle">Transição automática para vídeo</h4>
+      <p class="psec-desc">Quando ativa, o player começa mostrando a capa e muda sozinho para o vídeo após 7 segundos. Desative para permanecer sempre na capa (o vídeo continua disponível pelo botão do player expandido).</p>
+      <div class="adshield-card" id="autovideo-card">
+        <div class="adshield-icon ${autoVideoEnabled() ? 'on' : ''}">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M22 8l-5 4 5 4V8z" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="adshield-info">
+          <div class="adshield-status">${autoVideoEnabled() ? 'Transição automática ativa' : 'Transição automática desativada'}</div>
+          <div class="adshield-sub">${autoVideoEnabled() ? 'Capa \u2192 vídeo após 7 segundos' : 'O player permanece no modo capa'}</div>
+        </div>
+        <button class="pl-action-btn" id="autovideo-toggle">${autoVideoEnabled() ? 'Desativar' : 'Ativar'}</button>
+      </div>
+    </div>
+
+    <div class="psec-block">
+      <h4 class="psec-subtitle">Player mobile — personalizar exibição</h4>
+      <p class="psec-desc">Escolha, para cada modo do player no celular, se aparecem os <strong>controles do player</strong> (progresso, botões e curtir) e a seção <strong>Videoclipes relacionados</strong>. Vale apenas para a versão mobile.</p>
+      <div class="mpp-grid" id="mpp-grid">
+        ${['video','cover','queue'].map(mode => {
+          const label = mode === 'video' ? 'Vídeo' : (mode === 'cover' ? 'Capa' : 'Fila');
+          const tOn = MobilePlayerPrefs.isVisible(mode, 'transport');
+          const rOn = MobilePlayerPrefs.isVisible(mode, 'related');
+          return `
+          <div class="mpp-mode">
+            <div class="mpp-mode-title">${label}</div>
+            <label class="mpp-row">
+              <span>Controles do player</span>
+              <button class="mpp-toggle ${tOn ? 'on' : ''}" data-mode="${mode}" data-section="transport" role="switch" aria-checked="${tOn}"><span class="mpp-knob"></span></button>
+            </label>
+            <label class="mpp-row">
+              <span>Videoclipes relacionados</span>
+              <button class="mpp-toggle ${rOn ? 'on' : ''}" data-mode="${mode}" data-section="related" role="switch" aria-checked="${rOn}"><span class="mpp-knob"></span></button>
+            </label>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="psec-block">
       <h4 class="psec-subtitle">Takeout — Levar seus dados</h4>
       <p class="psec-desc">Baixe um arquivo .json com tudo o que está salvo neste navegador — playlists, curtidas, links salvos, gostos, histórico, estatísticas e preferências — e importe em outro dispositivo para continuar de onde parou.</p>
       <div class="takeout-card">
@@ -4624,7 +5304,7 @@ function renderProfile() {
     ? tastes.length + ' gênero(s): ' + escapeHtml(tastes.slice(0, 3).join(', ')) + (tastes.length > 3 ? '…' : '')
     : 'Nenhum gênero definido ainda';
   const subMetrics = Math.floor(totalTime / 3600) + 'h tocadas · ' + totalPlays + ' reproduções · ' + state.likedTracks.size + ' curtidas';
-  const subSettings = (AdShield.enabled() ? 'Proteção ativa' : 'Proteção desativada') + ' · Takeout de dados';
+  const subSettings = (AdShield.enabled() ? 'Proteção ativa' : 'Proteção desativada') + ' · ' + (autoVideoEnabled() ? 'Vídeo automático' : 'Sempre na capa') + ' · Takeout de dados';
 
   main.innerHTML = `
     <div class="section">
@@ -4794,7 +5474,7 @@ function renderProfile() {
   document.getElementById('takeout-export').addEventListener('click', () => Takeout.download());
   const takeoutFile = document.createElement('input');
   takeoutFile.type = 'file';
-  takeoutFile.accept = 'application/json,.json';
+  takeoutFile.accept = 'application/json,.json,text/plain,.txt';
   takeoutFile.style.display = 'none';
   takeoutFile.addEventListener('change', () => {
     if (takeoutFile.files && takeoutFile.files[0]) Takeout.restore(takeoutFile.files[0]);
@@ -4811,6 +5491,35 @@ function renderProfile() {
     renderProfile();
     showToast(next ? 'Proteção contra anúncios ativada' : 'Proteção contra anúncios desativada');
   });
+
+  // ----- Configuracoes: toggle da transicao automatica capa -> video -----
+  const autoVidBtn = document.getElementById('autovideo-toggle');
+  if (autoVidBtn) autoVidBtn.addEventListener('click', () => {
+    const next = !autoVideoEnabled();
+    setAutoVideoEnabled(next);
+    if (!next) cancelAutoVideoTimer(); // corta um timer ja agendado
+    renderProfile();
+    showToast(next
+      ? 'Transição automática para vídeo ativada (7s)'
+      : 'Transição automática desativada — o player fica na capa');
+  });
+
+  // ----- Configuracoes: toggles de exibicao do player mobile -----
+  const mppGrid = document.getElementById('mpp-grid');
+  if (mppGrid) {
+    mppGrid.querySelectorAll('.mpp-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        const section = btn.dataset.section;
+        const next = !btn.classList.contains('on');
+        MobilePlayerPrefs.setVisible(mode, section, next);
+        btn.classList.toggle('on', next);
+        btn.setAttribute('aria-checked', String(next));
+        // Se o player mobile estiver aberto, reflete de imediato
+        if (isExpanded && expandedIsMobile) applyMobilePlayerPrefs();
+      });
+    });
+  }
 
   // ----- Gostos: chips, adicao e sugestoes -----
   const chipsEl = document.getElementById('taste-chips');
@@ -5094,6 +5803,8 @@ function updatePlayerUI() {
   if (playChanged) {
     iconPlay.style.display = state.isPlaying ? 'none' : '';
     iconPause.style.display = state.isPlaying ? '' : 'none';
+    // Botao verde enquanto toca (e nao branco)
+    btnPlay.classList.toggle('playing', state.isPlaying);
   }
 
   if (!isScrubbing) {
@@ -5153,6 +5864,37 @@ function updatePlayerUI() {
         }
       }
     });
+  }
+
+  // ----- Espelha estado no player mobile, quando aberto -----
+  if (isExpanded && expandedIsMobile) {
+    if (trackChanged) updateMobileMeta();
+    const mpIconPlay = document.getElementById('mp-icon-play');
+    const mpIconPause = document.getElementById('mp-icon-pause');
+    const mpPlay = document.getElementById('mp-play');
+    if (playChanged && mpIconPlay && mpIconPause) {
+      mpIconPlay.style.display = state.isPlaying ? 'none' : '';
+      mpIconPause.style.display = state.isPlaying ? '' : 'none';
+      if (mpPlay) mpPlay.classList.toggle('playing', state.isPlaying);
+    }
+    if (!isScrubbing) {
+      const prog = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0;
+      const mpFill = document.getElementById('mp-progress-fill');
+      const mpHandle = document.getElementById('mp-progress-handle');
+      const mpCur = document.getElementById('mp-time-current');
+      const mpTot = document.getElementById('mp-time-total');
+      if (mpFill) mpFill.style.width = prog + '%';
+      if (mpHandle) mpHandle.style.left = prog + '%';
+      if (mpCur) mpCur.textContent = fmtTime(state.currentTime);
+      if (mpTot) mpTot.textContent = fmtTime(state.duration);
+    }
+    const mpLike = document.getElementById('mp-like');
+    if (mpLike && (liked !== _uiCache.liked || trackChanged)) mpLike.classList.toggle('active', liked);
+    const mpShuffle = document.getElementById('mp-shuffle');
+    if (mpShuffle && state.isShuffled !== _uiCache.shuffled) mpShuffle.classList.toggle('active', state.isShuffled);
+    const mpRepeat = document.getElementById('mp-repeat');
+    if (mpRepeat && state.repeatMode !== _uiCache.repeat) mpRepeat.classList.toggle('active', state.repeatMode !== 'off');
+    if (state.playerMode === 'queue' && queueDirty) buildMobileQueue(false);
   }
 
   _uiCache.trackId = t.id;
@@ -5642,6 +6384,150 @@ globalSearchInput.addEventListener('keydown', (e) => {
 document.getElementById('btn-expand').addEventListener('click', toggleExpanded);
 
 // ============================================
+// PULL-TO-REFRESH — ATUALIZAR ARRASTANDO PARA BAIXO
+// Em todas as paginas: arrastar o topo do conteudo para baixo mostra o
+// circulo de carregamento e, ao soltar alem do limiar, os caches de
+// conteudo dinamico sao invalidados e a view atual e re-renderizada
+// (mesmo modelo do Spotify/YouTube Music).
+// ============================================
+const PullToRefresh = (function () {
+  const THRESHOLD = 72;      // px de arraste para disparar o refresh
+  const MAX_PULL = 120;      // px maximos de deslocamento do spinner
+  const RESISTANCE = 0.5;    // fator de resistencia do arraste
+  const MIN_SPIN_MS = 650;   // tempo minimo com o spinner girando
+
+  let spinner = null;
+  let startY = 0, startX = 0;
+  let pulling = false;       // gesto elegivel em andamento
+  let engaged = false;       // direcao vertical confirmada
+  let refreshing = false;
+  let pullDist = 0;
+
+  function ensureSpinner() {
+    if (spinner) return spinner;
+    spinner = document.createElement('div');
+    spinner.id = 'ptr-spinner';
+    spinner.innerHTML = '<div class="ptr-circle"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3.2-6.9"/><polyline points="21 3 21 9 15 9" fill="none"/></svg></div>';
+    document.body.appendChild(spinner);
+    return spinner;
+  }
+
+  function positionSpinner() {
+    const rect = main.getBoundingClientRect();
+    spinner.style.left = (rect.left + rect.width / 2) + 'px';
+    spinner.style.top = rect.top + 'px';
+  }
+
+  function setPull(dist) {
+    pullDist = dist;
+    const eased = Math.min(MAX_PULL, dist * RESISTANCE);
+    const ready = eased >= THRESHOLD * RESISTANCE ? 1 : eased / (THRESHOLD * RESISTANCE);
+    spinner.style.setProperty('--ptr-y', eased + 'px');
+    spinner.style.setProperty('--ptr-rot', (eased * 2.4) + 'deg');
+    spinner.style.setProperty('--ptr-opacity', String(Math.min(1, ready + 0.15)));
+    spinner.classList.toggle('ptr-ready', eased >= THRESHOLD * RESISTANCE);
+  }
+
+  // Invalida os caches de conteudo dinamico — o mesmo conjunto que o boot
+  // limpa num F5 — mais os caches de busca em memoria.
+  function invalidateCaches() {
+    ['vibefm_news_cache', 'vibefm_taste_yt_playlists', 'vibefm_trending_cache'].forEach(k => {
+      try { localStorage.removeItem(k); } catch (_) {}
+    });
+    try { ytSearchCache.clear(); } catch (_) {}
+    try { ytPlaylistSearchCache.clear(); } catch (_) {}
+    try { ytShortsCache.clear(); } catch (_) {}
+    try { ytChannelSearchCache.clear(); } catch (_) {}
+    try { artistProfileCache.clear(); } catch (_) {}
+    try { dynamicPlaylistCache.clear(); } catch (_) {}
+  }
+
+  async function doRefresh() {
+    refreshing = true;
+    spinner.classList.add('ptr-refreshing');
+    spinner.style.setProperty('--ptr-y', (THRESHOLD * RESISTANCE + 8) + 'px');
+    const started = Date.now();
+    invalidateCaches();
+    try { setView(state.view); } catch (_) {}
+    const wait = Math.max(0, MIN_SPIN_MS - (Date.now() - started));
+    setTimeout(() => {
+      spinner.classList.remove('ptr-refreshing', 'ptr-ready');
+      spinner.classList.add('ptr-leaving');
+      setTimeout(() => {
+        spinner.classList.remove('ptr-leaving');
+        spinner.style.setProperty('--ptr-y', '0px');
+        spinner.style.setProperty('--ptr-opacity', '0');
+        refreshing = false;
+      }, 220);
+    }, wait);
+  }
+
+  function onTouchStart(e) {
+    if (refreshing || e.touches.length !== 1) return;
+    if (main.scrollTop > 0) return;
+    // Nao inicia sobre alcas de drag-and-drop (reordenacao de fila/playlist)
+    if (e.target.closest('.drag-handle, .queue-drag-handle')) return;
+    startY = e.touches[0].clientY;
+    startX = e.touches[0].clientX;
+    pulling = true;
+    engaged = false;
+    ensureSpinner();
+    positionSpinner();
+  }
+
+  function onTouchMove(e) {
+    if (!pulling || refreshing) return;
+    const dy = e.touches[0].clientY - startY;
+    const dx = e.touches[0].clientX - startX;
+    if (!engaged) {
+      // Confirma a direcao: gesto horizontal (carrosseis) nao dispara
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) { pulling = false; return; }
+      if (dy > 8 && main.scrollTop <= 0) engaged = true;
+      else if (dy < -4) { pulling = false; return; }
+      else return;
+    }
+    if (main.scrollTop > 0) { cancelPull(); return; }
+    if (dy <= 0) { cancelPull(); return; }
+    e.preventDefault(); // impede o scroll/bounce nativo durante o gesto
+    setPull(dy);
+  }
+
+  function cancelPull() {
+    pulling = false;
+    engaged = false;
+    if (spinner && !refreshing) {
+      spinner.classList.add('ptr-leaving');
+      setTimeout(() => {
+        spinner.classList.remove('ptr-leaving', 'ptr-ready');
+        spinner.style.setProperty('--ptr-y', '0px');
+        spinner.style.setProperty('--ptr-opacity', '0');
+      }, 180);
+    }
+  }
+
+  function onTouchEnd() {
+    if (!pulling || refreshing) { pulling = false; return; }
+    const fired = engaged && pullDist * RESISTANCE >= THRESHOLD * RESISTANCE;
+    pulling = false;
+    engaged = false;
+    if (fired) doRefresh();
+    else cancelPull();
+    pullDist = 0;
+  }
+
+  function init() {
+    // passive:false no touchmove para poder chamar preventDefault
+    main.addEventListener('touchstart', onTouchStart, { passive: true });
+    main.addEventListener('touchmove', onTouchMove, { passive: false });
+    main.addEventListener('touchend', onTouchEnd, { passive: true });
+    main.addEventListener('touchcancel', onTouchEnd, { passive: true });
+  }
+
+  return { init, refresh: doRefresh };
+})();
+PullToRefresh.init();
+
+// ============================================
 // INIT
 // ============================================
 // Sempre que a pagina e atualizada (recarregada), as informacoes tambem
@@ -5673,6 +6559,7 @@ initSidebar();
   state.queue = last.queue || [last.track];
   state.queueIndex = last.queueIndex || 0;
   state.currentPlaylist = last.currentPlaylist || null;
+  state.currentPlaylistName = last.currentPlaylistName || null;
   state.currentTime = last.currentTime || 0;
 
   // Adiciona a track ao TRACKS se nao existir

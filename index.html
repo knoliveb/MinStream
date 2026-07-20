@@ -26,6 +26,104 @@
   <!-- Backdrop do modo expandido -->
   <div id="theater-backdrop"></div>
 
+  <!-- ============================================================
+       PLAYER MOBILE (isolado do #expanded-player do desktop).
+       Usado SOMENTE quando o app roda em telas pequenas. Compartilha
+       o mesmo #video-cover (iframe do YouTube) e o mesmo estado; tem
+       markup e CSS proprios (.mp-*) para nao colidir com o desktop.
+       ============================================================ -->
+  <div id="mobile-player" data-mode="cover">
+    <div class="mp-bg"></div>
+    <div class="mp-scrim"></div>
+
+    <div class="mp-topbar">
+      <button class="mp-icon-btn" id="mp-close" title="Fechar">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="mp-context">
+        <div class="mp-context-label" id="mp-context-label">TOCANDO AGORA</div>
+        <div class="mp-context-name" id="mp-context-name">Tocando agora</div>
+      </div>
+      <div class="mp-topbar-spacer"></div>
+    </div>
+
+    <!-- Abas: Vídeo / Capa / Fila -->
+    <div class="mp-tabs">
+      <button class="mp-tab" data-mode="video">Vídeo</button>
+      <button class="mp-tab active" data-mode="cover">Capa</button>
+      <button class="mp-tab" data-mode="queue">Fila</button>
+    </div>
+
+    <!-- Palco: capa grande / vídeo / fila -->
+    <div class="mp-stage" id="mp-stage">
+      <div class="mp-cover-view">
+        <img class="mp-cover-img" id="mp-cover-img" src="" alt="">
+      </div>
+      <div class="mp-queue-view">
+        <ul class="queue-items" id="mp-queue-items"></ul>
+      </div>
+    </div>
+
+    <!-- Bloco de informações + ação (curtir) -->
+    <div class="mp-meta-row">
+      <div class="mp-meta">
+        <div class="mp-title" id="mp-title"></div>
+        <div class="mp-artist" id="mp-artist"></div>
+      </div>
+      <button class="mp-like" id="mp-like" title="Curtir">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+      </button>
+    </div>
+
+    <!-- Barra de progresso -->
+    <div class="mp-progress">
+      <div class="mp-progress-bar" id="mp-progress-bar">
+        <div class="mp-progress-fill" id="mp-progress-fill"></div>
+        <div class="mp-progress-handle" id="mp-progress-handle"></div>
+      </div>
+      <div class="mp-times">
+        <span id="mp-time-current">0:00</span>
+        <span id="mp-time-total">0:00</span>
+      </div>
+    </div>
+
+    <!-- Controles de transporte -->
+    <div class="mp-controls">
+      <button class="mp-ctrl" id="mp-shuffle" title="Aleatório">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8" stroke-linecap="round" stroke-linejoin="round"/><line x1="4" y1="20" x2="21" y2="3" stroke-linecap="round"/><polyline points="21 16 21 21 16 21" stroke-linecap="round" stroke-linejoin="round"/><line x1="15" y1="15" x2="21" y2="21" stroke-linecap="round"/><line x1="4" y1="4" x2="9" y2="9" stroke-linecap="round"/></svg>
+      </button>
+      <button class="mp-ctrl" id="mp-prev" title="Anterior">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+      </button>
+      <button class="mp-play" id="mp-play" title="Tocar/Pausar">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor" id="mp-icon-play"><path d="M8 5v14l11-7z"/></svg>
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor" id="mp-icon-pause" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </button>
+      <button class="mp-ctrl" id="mp-next" title="Próxima">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+      </button>
+      <button class="mp-ctrl" id="mp-repeat" title="Repetir">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11V9a4 4 0 014-4h14" stroke-linecap="round"/><polyline points="7 23 3 19 7 15" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 13v2a4 4 0 01-4 4H3" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <!-- Rodapé de ações secundárias -->
+    <div class="mp-footer">
+      <button class="mp-foot-btn" id="mp-tv" title="Modo TV">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" stroke-linejoin="round"/><polyline points="8 2 12 6 16 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="mp-foot-btn" id="mp-share" title="Compartilhar">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5" stroke-linecap="round"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <!-- Relacionados (aparece ao rolar) -->
+    <div class="mp-related hidden" id="mp-related">
+      <h3>Videoclipes relacionados</h3>
+      <div class="exp-related-row" id="mp-related-row"></div>
+    </div>
+  </div>
+
   <!-- Player expandido: tres modos de visualizacao -->
   <div id="expanded-player" data-mode="video">
     <div class="exp-topbar">
@@ -295,5 +393,7 @@
   <script src="app.js"></script>
   <!-- YouTube IFrame API loaded AFTER app.js so the ready callback already exists -->
   <script src="https://www.youtube.com/iframe_api"></script>
+  <!-- Android: vigia de reproducao em segundo plano (nao interfere no resto) -->
+  <script src="keepalive.js"></script>
 </body>
 </html>

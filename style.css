@@ -3343,118 +3343,10 @@ body.tv-mode #tv-exit { display: flex; }
   .progress-container { height: 3px; border-radius: 0; }
   .progress-handle { display: none; }
 
-  /* ---------- Player expandido aberto: dock vira barra completa ---------- */
-  body.theater-open #mobile-tabbar { display: none; }
-  body.theater-open #player-dock {
-    left: 0; right: 0; bottom: 0;
-    height: calc(var(--dock-h) + var(--safe-bottom) + 34px);
-    min-height: calc(var(--dock-h) + var(--safe-bottom) + 34px);
-    padding-bottom: var(--safe-bottom);
-    border-radius: 0;
-    border-left: none; border-right: none; border-bottom: none;
-    box-shadow: none;
-    background: rgba(16,16,16,0.92);
-  }
-  body.theater-open .player-row { padding-top: 8px; }
-  body.theater-open #btn-like,
-  body.theater-open #btn-shuffle,
-  body.theater-open #btn-prev,
-  body.theater-open #btn-repeat,
-  body.theater-open #btn-queue { display: flex; }
-  body.theater-open .ctrl-btn { width: 38px; height: 38px; }
-  body.theater-open .player-info { display: none; } /* info ja aparece no palco */
-  body.theater-open .player-center {
-    flex: 1;
-    flex-direction: column;
-    justify-content: center;
-    gap: 4px;
-  }
-  body.theater-open .ctrl-row { gap: 6px; justify-content: center; width: 100%; }
-  /* Player expandido: scrub preciso com bolinha + contador de tempo */
-  body.theater-open .progress-row {
-    position: static;
-    width: 100%;
-    height: 24px;
-    padding: 0 8px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  body.theater-open .time-label {
-    display: block;
-    font-size: 11px;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
-  }
-  body.theater-open .progress-container {
-    flex: 1;
-    height: 20px;              /* alvo de toque generoso */
-    background: transparent;
-    display: flex;
-    align-items: center;
-    touch-action: none;        /* arrastar nao rola a pagina */
-  }
-  body.theater-open .progress-bar {
-    height: 4.5px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.18);
-  }
-  body.theater-open .progress-fill { border-radius: 999px; }
-  body.theater-open .progress-handle {
-    display: block;
-    opacity: 1;                /* bolinha sempre visivel */
-    width: 13px;
-    height: 13px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
-  }
-  /* No modo expandido o video e posicionado por JS sobre o palco;
-     quando em modo capa/fila, o mini video fica em cima da barra */
-  body.theater-open #video-cover:not(.theater) {
-    bottom: calc(var(--dock-h) + var(--safe-bottom) + 42px);
-  }
-
-  /* Player expandido em tela cheia (folha iOS) */
-  #expanded-player {
-    top: 0;
-    left: 0; right: 0;
-    /* Reserva exatamente a altura do dock em modo theater
-       (dock-h + safe-bottom + 34px) para nenhum conteudo ficar
-       cortado/encoberto pelos controles do player */
-    bottom: calc(var(--dock-h) + var(--safe-bottom) + 34px);
-    border-radius: 0;
-    padding: calc(var(--safe-top) + 14px) 14px 24px;
-  }
-  /* Respiro extra no fim do conteudo rolavel do player expandido */
-  .exp-related { padding-bottom: 10px; }
-  .exp-topbar { flex-wrap: wrap; gap: 8px; }
-  .exp-context { font-size: 14px; width: 100%; order: -1; }
-
-  /* Abas Video/Capa/Fila como segmented control do iOS */
-  .exp-tabs {
-    margin-left: 0;
-    margin-right: auto;
-    background: rgba(118,118,128,0.24);
-    border: none;
-    border-radius: 9px;
-    padding: 2px;
-  }
-  .exp-tab {
-    border-radius: 7px;
-    padding: 7px 10px;
-    font-size: 12px;
-  }
-  .exp-tab.active {
-    background: #636366;
-    color: #fff;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-  }
-  #exp-close {
-    width: 34px; height: 34px;
-    border-radius: 50%;
-    background: rgba(118,118,128,0.24);
-    border: none;
-  }
+  /* No mobile o player expandido do desktop (#expanded-player) nao e usado:
+     abrimos o #mobile-player isolado. As regras de theater mobile antigas
+     foram removidas para evitar conflitos. Ver bloco "PLAYER MOBILE". */
+  body.mobile-theater #expanded-player { display: none !important; }
 
   /* ---------- Toque em vez de hover ---------- */
   /* Acoes que so apareciam no hover ficam sempre visiveis */
@@ -4577,3 +4469,577 @@ body.tv-mode #tv-exit { display: flex; }
   .profile-collapse.open .profile-collapse-inner { padding: 14px 12px 16px; }
   .psec-stats-grid { grid-template-columns: repeat(2, 1fr); padding: 0; }
 }
+
+/* ============================================
+   PULL-TO-REFRESH — círculo de carregamento
+   ============================================ */
+#ptr-spinner {
+  position: fixed;
+  z-index: 900;
+  /* left/top definidos via JS (centro do #main-content) */
+  transform: translate(-50%, calc(-46px + var(--ptr-y, 0px)));
+  opacity: var(--ptr-opacity, 0);
+  pointer-events: none;
+  transition: none;
+  will-change: transform, opacity;
+}
+
+#ptr-spinner .ptr-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface, #181818);
+  border: 1px solid var(--border, #2a2a2a);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary, #b3b3b3);
+  transform: rotate(var(--ptr-rot, 0deg));
+}
+
+/* Passou do limiar: seta fica verde, pronta para soltar */
+#ptr-spinner.ptr-ready .ptr-circle {
+  color: var(--accent, #0AE448);
+}
+
+/* Soltou: gira continuamente enquanto atualiza */
+#ptr-spinner.ptr-refreshing {
+  transition: transform 0.18s ease-out;
+}
+#ptr-spinner.ptr-refreshing .ptr-circle {
+  color: var(--accent, #0AE448);
+  animation: ptr-spin 0.8s linear infinite;
+}
+
+/* Recolhendo (cancelado ou concluído) */
+#ptr-spinner.ptr-leaving {
+  transition: transform 0.2s ease-in, opacity 0.2s ease-in;
+  opacity: 0 !important;
+}
+
+@keyframes ptr-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Evita o glow/bounce nativo do WebView competir com o gesto */
+#main-content { overscroll-behavior-y: contain; }
+
+@media (prefers-reduced-motion: reduce) {
+  #ptr-spinner.ptr-refreshing .ptr-circle { animation-duration: 1.4s; }
+}
+
+/* ============================================
+   PASTA "RECENTES" EM SUAS PLAYLISTS (HOME)
+   ============================================ */
+.pl-carousel-track .recent-folder-card {
+  flex: none;
+  width: 180px;
+  scroll-snap-align: start;
+  cursor: pointer;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.3s ease;
+}
+.pl-carousel-track .recent-folder-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+}
+.pl-carousel-track .recent-folder-card .album-cover-wrap { aspect-ratio: 1; }
+
+/* Grade 2x2 com as capas das últimas 4 reproduções (estilo pasta) */
+.folder-cover-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+}
+.folder-cover-cell {
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(0,112,243,0.12), rgba(0,0,0,0.5));
+}
+.folder-cover-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.folder-badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: #fff;
+  background: rgba(0,112,243,0.9);
+  border-radius: 6px;
+}
+
+@media (max-width: 768px) {
+  .pl-carousel-track .recent-folder-card { width: 150px; }
+  .pl-carousel-track .recent-folder-card:hover { transform: none; box-shadow: none; }
+}
+
+/* ============================================
+   BOTÃO PLAY/PAUSE VERDE (dock)
+   Ao clicar (pressionar) e enquanto a música toca, o botão fica
+   verde — e não branco.
+   ============================================ */
+.ctrl-play:active {
+  background: var(--green);
+  color: var(--bg);
+}
+.ctrl-play.playing {
+  background: var(--green);
+  color: var(--bg);
+}
+.ctrl-play.playing:hover {
+  background: var(--green);
+  filter: brightness(1.12);
+}
+
+@media (max-width: 768px) {
+  /* No mobile o botão do mini player é transparente: o ícone fica verde */
+  .ctrl-play:active { background: transparent; color: var(--green); }
+  .ctrl-play.playing,
+  .ctrl-play.playing:hover { background: transparent; color: var(--green); filter: none; }
+}
+
+/* ============================================================
+   PLAYER MOBILE (#mobile-player) — ISOLADO DO DESKTOP
+   Aparência inspirada na referência: capa/arte em destaque, fundo
+   com a mesma capa desfocada + gradiente, título/artista grandes,
+   barra de progresso, controles de transporte centrais com play
+   redondo (branco pausado, verde tocando), abas Vídeo/Capa/Fila.
+   Namespace .mp-* — não colide com nada do #expanded-player.
+   Só é exibido dentro do @media mobile (regra .open).
+   ============================================================ */
+#mobile-player {
+  display: none; /* nunca aparece no desktop; ativado só no @media abaixo */
+}
+
+@media (max-width: 768px) {
+  #mobile-player {
+    position: fixed;
+    inset: 0;
+    z-index: 400;             /* acima do dock (290) e da tabbar (300) */
+    display: none;            /* .open ativa */
+    flex-direction: column;
+    padding: calc(var(--safe-top) + 8px) 16px calc(var(--safe-bottom) + 14px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    color: #fff;
+    background: #0a0a0a;      /* base sólida: nunca revela o app atrás */
+  }
+  #mobile-player.open {
+    display: flex;
+    animation: mpFadeIn 0.32s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  @keyframes mpFadeIn {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Fundo: a capa da faixa, desfocada, + gradiente escuro */
+  #mobile-player .mp-bg {
+    position: fixed;
+    inset: -30px;
+    background-color: #0a0a0a;
+    background-image: var(--mp-bg, none);
+    background-size: cover;
+    background-position: center;
+    filter: blur(30px) saturate(150%) brightness(0.55);
+    z-index: -2;
+    pointer-events: none;
+  }
+  #mobile-player .mp-scrim {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(180deg,
+      rgba(0,0,0,0.28) 0%,
+      rgba(0,0,0,0.42) 40%,
+      rgba(0,0,0,0.72) 74%,
+      rgba(0,0,0,0.92) 100%);
+    z-index: -1;
+    pointer-events: none;
+  }
+
+  /* ---------- Topo: fechar / contexto / menu ---------- */
+  #mobile-player .mp-topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-icon-btn {
+    width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    border: none; background: transparent;
+    color: #fff; cursor: pointer;
+    border-radius: 50%;
+  }
+  #mobile-player .mp-icon-btn:active { background: rgba(255,255,255,0.12); }
+  /* Espacador do mesmo tamanho do botao de fechar: mantem o contexto
+     centralizado agora que o botao "..." foi removido */
+  #mobile-player .mp-topbar-spacer { width: 40px; flex-shrink: 0; }
+  #mobile-player .mp-context {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+  }
+  #mobile-player .mp-context-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    color: rgba(255,255,255,0.7);
+  }
+  #mobile-player .mp-context-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ---------- Abas Vídeo / Capa / Fila (segmented control) ---------- */
+  #mobile-player .mp-tabs {
+    display: flex;
+    align-self: center;
+    gap: 2px;
+    margin: 14px 0 6px;
+    padding: 3px;
+    background: rgba(0,0,0,0.35);
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-tab {
+    padding: 7px 18px;
+    border: none;
+    background: transparent;
+    color: rgba(255,255,255,0.7);
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  #mobile-player .mp-tab.active {
+    background: #fff;
+    color: #000;
+  }
+
+  /* ---------- Palco: capa grande / vídeo / fila ---------- */
+  #mobile-player .mp-stage {
+    position: relative;
+    width: 100%;
+    margin: 12px 0 4px;
+    flex-shrink: 0;
+  }
+  /* Cada modo mostra a sua vista */
+  #mobile-player .mp-cover-view,
+  #mobile-player .mp-queue-view { display: none; }
+  #mobile-player[data-mode="cover"] .mp-cover-view { display: block; }
+  #mobile-player[data-mode="queue"] .mp-queue-view { display: block; }
+  /* No modo vídeo, o #video-cover é posicionado por JS sobre o palco:
+     o palco fica com proporção de vídeo e transparente */
+  #mobile-player[data-mode="video"] .mp-stage {
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  #mobile-player[data-mode="cover"] .mp-stage { aspect-ratio: 1; }
+  #mobile-player[data-mode="queue"] .mp-stage { aspect-ratio: auto; }
+
+  #mobile-player .mp-cover-img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+    display: block;
+  }
+  #mobile-player .mp-queue-view .queue-items {
+    max-height: 46vh;
+    overflow-y: auto;
+    padding: 4px;
+    background: rgba(0,0,0,0.28);
+    border-radius: 14px;
+  }
+
+  /* ---------- Info + curtir ---------- */
+  #mobile-player .mp-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-meta { flex: 1; min-width: 0; }
+  #mobile-player .mp-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.3px;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #mobile-player .mp-artist {
+    font-size: 14px;
+    color: rgba(255,255,255,0.72);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+  #mobile-player .mp-like {
+    width: 44px; height: 44px;
+    flex-shrink: 0;
+    border: none; background: transparent;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #mobile-player .mp-like:active { transform: scale(0.9); }
+  #mobile-player .mp-like.active {
+    color: var(--green);
+  }
+  #mobile-player .mp-like.active svg { fill: var(--green); stroke: var(--green); }
+
+  /* ---------- Barra de progresso ---------- */
+  #mobile-player .mp-progress {
+    margin-top: 14px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-progress-bar {
+    position: relative;
+    height: 16px;             /* alvo de toque generoso */
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+  }
+  #mobile-player .mp-progress-bar::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.24);
+  }
+  #mobile-player .mp-progress-fill {
+    position: absolute;
+    left: 0;
+    height: 4px;
+    width: 0%;
+    border-radius: 999px;
+    background: #fff;
+  }
+  #mobile-player .mp-progress-handle {
+    position: absolute;
+    left: 0%;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    transform: translateX(-50%);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+  #mobile-player .mp-times {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.6);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- Controles de transporte ---------- */
+  #mobile-player .mp-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 16px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-ctrl {
+    width: 52px; height: 52px;
+    border: none; background: transparent;
+    color: rgba(255,255,255,0.92);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #mobile-player .mp-ctrl:active { transform: scale(0.9); }
+  #mobile-player .mp-ctrl.active { color: var(--green); }
+  #mobile-player .mp-play {
+    width: 68px; height: 68px;
+    border-radius: 50%;
+    border: none;
+    background: #fff;
+    color: #000;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  #mobile-player .mp-play:active { transform: scale(0.94); }
+  /* Verde enquanto toca (não branco) */
+  #mobile-player .mp-play.playing {
+    background: var(--green);
+    color: #041007;
+  }
+
+  /* ---------- Rodapé de ações secundárias ---------- */
+  #mobile-player .mp-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 20px;
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-foot-btn {
+    width: 40px; height: 40px;
+    border: none; background: transparent;
+    color: rgba(255,255,255,0.75);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #mobile-player .mp-foot-btn:active { color: #fff; transform: scale(0.9); }
+
+  /* ---------- Relacionados ---------- */
+  #mobile-player .mp-related {
+    margin-top: 24px;
+    flex-shrink: 0;
+  }
+  #mobile-player .mp-related.hidden { display: none; }
+  /* Ocultado por preferencia do usuario (Configuracoes) */
+  #mobile-player .mp-hidden-pref { display: none !important; }
+  #mobile-player .mp-related h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.9);
+    margin: 0 0 12px;
+  }
+
+  /* Quando o player mobile está aberto, esconde a tabbar por baixo */
+  body.mobile-theater #mobile-tabbar { display: none; }
+
+  /* No modo vídeo, o iframe (#video-cover) precisa ficar ACIMA do
+     #mobile-player (z-index 400) para aparecer sobre o palco. Ambos são
+     filhos do body, competindo no mesmo stacking context. */
+  body.mobile-theater #video-cover.theater { z-index: 420; }
+}
+
+/* ============================================================
+   MODO VÍDEO EM PAISAGEM (mobile): imersão total.
+   Quando o player mobile está aberto no modo vídeo e o aparelho está
+   na horizontal, o vídeo ocupa 100% da tela IGNORANDO a safe area —
+   assim não sobra a barra na região da câmera frontal/notch. O
+   viewport-fit=cover (no <meta>) permite avançar sob o recorte.
+   ============================================================ */
+@media (max-width: 900px) and (orientation: landscape) {
+  body.mobile-theater[data-mp-mode="video"] #video-cover.theater,
+  body.mobile-theater #mobile-player[data-mode="video"] ~ #video-cover.theater {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    /* cobre também a área da câmera/notch */
+    width: 100dvw !important;
+    height: 100dvh !important;
+    border-radius: 0 !important;
+    border: none !important;
+    z-index: 2000 !important;
+    background: #000;
+  }
+  /* Esconde a UI do player por baixo do vídeo em paisagem (imersão),
+     deixando só o vídeo; o usuário sai tocando/voltando à vertical. */
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-topbar,
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-tabs,
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-meta-row,
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-progress,
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-controls,
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-footer,
+  body.mobile-theater[data-mp-mode="video"] #mobile-player .mp-related {
+    opacity: 0;
+    pointer-events: none;
+  }
+  body.mobile-theater[data-mp-mode="video"] #mobile-player {
+    padding: 0;
+    background: #000;
+  }
+}
+
+/* ============================================
+   CONFIGURAÇÕES: TOGGLES DO PLAYER MOBILE (mpp-*)
+   Grade por modo (Vídeo/Capa/Fila) com switches iOS para escolher
+   a visibilidade de "Videoclipes relacionados" e dos controles.
+   ============================================ */
+.mpp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.mpp-mode {
+  background: var(--surface-2, rgba(255,255,255,0.05));
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.mpp-mode-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+.mpp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary, #b3b3b3);
+  cursor: pointer;
+}
+/* Switch estilo iOS */
+.mpp-toggle {
+  position: relative;
+  width: 42px;
+  height: 25px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(120,120,128,0.32);
+  cursor: pointer;
+  transition: background 0.2s ease;
+  padding: 0;
+}
+.mpp-toggle .mpp-knob {
+  position: absolute;
+  top: 2.5px;
+  left: 2.5px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  transition: transform 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.mpp-toggle.on { background: var(--green); }
+.mpp-toggle.on .mpp-knob { transform: translateX(17px); }
