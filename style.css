@@ -2927,99 +2927,334 @@ body, button, input {
 }
 
 /* ===== Letra da faixa (sincronizada via LRCLIB) =====
-   Container entre os controles/palco e "Videoclipes relacionados".
-   O fundo do container é OPACO e a cor acompanha a cor de destaque da
-   capa da faixa: o lyrics.js amostra a thumbnail e define a variável
-   --lyrics-bg (tom escuro derivado do matiz dominante); sem cor legível,
-   vale o fallback neutro abaixo. Por isso o texto usa escala de BRANCO —
-   contraste estável sobre qualquer matiz.
-   A classe .hidden (Perfil > Configurações) oculta a seção. */
+   Cartão opaco com um CABEÇALHO fixo ("Letra" + botões circulares) que
+   projeta sombra; o texto rola por baixo dele e desaparece sob a sombra.
+   O fundo acompanha a cor de destaque da capa (--lyrics-bg, definida pelo
+   lyrics.js); o texto usa escala de BRANCO para contraste sobre qualquer
+   matiz. A classe .hidden (Perfil > Configurações) oculta a seção. */
 .exp-lyrics { width: 100%; margin-bottom: 24px; }
 .exp-lyrics.hidden { display: none; }
-.exp-lyrics h3 {
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--text);
-  margin-bottom: 14px;
+/* Sem letra no desktop ("Sem letra disponível" ou faixa instrumental):
+   o container some por completo — quando a faixa tem letra, o lyrics.js
+   remove a classe e ele reaparece sozinho. Só existe no player desktop;
+   o mobile (mp-lyrics) não usa esta classe. */
+.exp-lyrics.lyrics-none { display: none; }
+
+/* No layout clássico o wrapper não deve afetar o fluxo (empilhamento
+   palco → letra → relacionados): display:contents o torna transparente. */
+.exp-modern-top { display: contents; }
+
+/* ===== Layout MODERNO do player expandido (desktop) =====
+   Vídeo/capa/fila (palco) e letra LADO A LADO; videoclipes relacionados
+   em largura total abaixo. Ativado por #expanded-player.layout-modern
+   (preferência do usuário). Mesmos elementos e funções do layout clássico
+   — só muda a disposição. O #video-cover continua seguindo o .exp-stage
+   pelo loop de sincronização, então o vídeo se ajusta sozinho.
+
+   APARÊNCIA FIXA: as duas colunas valem para TODA a faixa desktop
+   (≥769px), sem empilhamento em telas médias. O container de letra é
+   SEMPRE renderizado ao lado do palco, com a mesma altura — com letra
+   sincronizada, com letra estática ou sem letra nenhuma (mostra
+   "Sem letra disponível" / "Buscando letra…" e segue idêntico).
+
+   ALTURA UNIFICADA: no moderno, o palco e a letra têm EXATAMENTE a
+   altura que o palco tem no layout clássico — min(52vh, 560px) — e o
+   palco mantém a proporção 16:9 (a largura é derivada da altura, como
+   no clássico). A linha da grade tem altura TRAVADA nesse valor: a
+   letra rola por dentro do próprio container e NUNCA estica a linha
+   (antes, uma letra longa inflava a linha da grade e empurrava o
+   palco/vídeo para fora da tela). O termo 30vw protege telas
+   estreitas/retrato: limita a altura para o palco 16:9 caber ao lado
+   da coluna da letra, deixando a coluna da letra confortável. */
+@media (min-width: 769px) {
+  #expanded-player.layout-modern {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 16px;
+    padding: 20px 24px;
+    overflow-y: auto;
+  }
+  #expanded-player.layout-modern.open { display: flex; }
+
+  #expanded-player.layout-modern {
+    --modern-w: min(96vw, 1440px);
+    --modern-h: min(52vh, 560px, 30vw);
+  }
+
+  /* O wrapper vira a grade de 2 colunas com a altura travada — em
+     qualquer largura de desktop. */
+  #expanded-player.layout-modern .exp-modern-top {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 18px;
+    width: var(--modern-w);
+    max-width: 100%;
+    height: var(--modern-h);
+    align-items: stretch;
+  }
+  /* Palco com as MESMAS dimensões do clássico em TODOS os modos
+     (vídeo/capa/fila): altura min(52vh, 560px) e proporção 16:9 —
+     a largura é derivada da altura. Sobrepõe os ajustes de
+     largura/altura dos modos cover/queue. */
+  #expanded-player.layout-modern .exp-stage,
+  #expanded-player.layout-modern[data-mode="cover"] .exp-stage,
+  #expanded-player.layout-modern[data-mode="queue"] .exp-stage {
+    width: auto;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    aspect-ratio: 16 / 9;
+    align-self: center;
+  }
+  /* Letra SEMPRE com EXATAMENTE a altura do palco: o texto rola por
+     dentro, como no clássico. A cadeia min-height:0 é essencial — sem
+     ela o conteúdo da letra volta a impor sua altura à linha da grade. */
+  #expanded-player.layout-modern .exp-lyrics {
+    width: 100%;
+    margin: 0;
+    min-width: 0;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* ...mas quando a faixa NÃO tem letra, o container some (esta regra
+     precisa de especificidade maior que o display:flex acima). */
+  #expanded-player.layout-modern .exp-lyrics.lyrics-none {
+    display: none;
+  }
+  #expanded-player.layout-modern .exp-lyrics .lyrics-box {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  #expanded-player.layout-modern .exp-lyrics .lyrics-scroll {
+    height: auto;
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  /* Letra oculta (Perfil > Configurações) ou INEXISTENTE para a faixa
+     (.lyrics-none, aplicada pelo lyrics.js): o palco fica centralizado
+     em coluna única, sem sobrar espaço vazio ao lado. Aqui a altura é
+     explícita (não-percentual): com justify/align center o tamanho vira
+     fit-content e, sem conteúdo em fluxo, a caixa colapsaria para 0. */
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.hidden),
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-none) {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.hidden) .exp-stage,
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-none) .exp-stage {
+    height: var(--modern-h);
+    width: auto;
+    justify-self: center;
+    align-self: center;
+  }
+
+  #expanded-player.layout-modern .exp-related {
+    width: var(--modern-w);
+    max-width: 100%;
+    margin: 0;
+  }
+  /* No moderno, os relacionados podem quebrar em grade (em vez de rolar) */
+  #expanded-player.layout-modern .exp-related-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow-x: visible;
+  }
 }
 
-.lyrics-box-wrap { position: relative; }
-
-/* Alternador "com/sem sincronização" — canto superior direito do container */
-.lyrics-sync-toggle {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: rgba(0, 0, 0, 0.45);
-  color: rgba(255, 255, 255, 0.85);
-  font-family: inherit;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+/* Telas médias (769–1080px): as duas colunas CONTINUAM — só ajustes
+   finos: relacionados em 3 colunas e cabeçalho da letra compacto para
+   os 4 botões caberem na coluna mais estreita. */
+@media (min-width: 769px) and (max-width: 1080px) {
+  #expanded-player.layout-modern .exp-related-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  #expanded-player.layout-modern .exp-lyrics .lyrics-header {
+    padding: 12px 14px 10px;
+    gap: 8px;
+  }
+  #expanded-player.layout-modern .exp-lyrics .lyrics-label { font-size: 22px; }
+  #expanded-player.layout-modern .exp-lyrics .lyrics-actions { gap: 6px; }
+  #expanded-player.layout-modern .exp-lyrics .lyrics-act {
+    width: 32px;
+    height: 32px;
+  }
 }
-.lyrics-sync-toggle:hover { color: #fff; border-color: rgba(255, 255, 255, 0.45); }
-.lyrics-sync-toggle.on { color: var(--green); border-color: rgba(10, 228, 72, 0.55); }
-.lyrics-sync-toggle.hidden { display: none; }
 
 .lyrics-box {
-  max-height: 340px;
-  overflow-y: auto;
-  padding: 18px 16px;
-  border-radius: 14px;
-  background: var(--lyrics-bg, #1d1d20); /* opaco; a cor real vem da capa */
+  position: relative;
+  border-radius: 16px;
+  background: var(--lyrics-bg, #26313f); /* opaco; a cor real vem da capa */
   transition: background-color 0.6s ease;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
 }
 
+/* Área rolável: o texto passa POR BAIXO do cabeçalho fixo. O padding-top
+   reserva o espaço do cabeçalho; o scroll-padding evita que a rolagem
+   pare com a linha escondida sob ele. */
+.lyrics-scroll {
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 72px 18px 18px;
+  scroll-padding-top: 76px;
+  -webkit-overflow-scrolling: touch;
+  /* O texto desaparece SUAVEMENTE ao se aproximar do cabeçalho: uma
+     máscara torna o conteúdo transparente na faixa sob a label. Isso
+     evita qualquer "linha" de corte — o fade é contínuo. A faixa opaca
+     do cabeçalho (58px) cobre onde o texto já está 100% transparente. */
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 44px, rgba(0,0,0,0.15) 58px, #000 74px, #000 100%);
+  mask-image: linear-gradient(to bottom,
+    transparent 44px, rgba(0,0,0,0.15) 58px, #000 74px, #000 100%);
+}
+.lyrics-scroll::-webkit-scrollbar { width: 8px; }
+.lyrics-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 4px; }
+
+/* Cabeçalho fixo opaco por cima — a label e os botões ficam sólidos; o
+   fade de sumiço do texto é feito pela máscara acima, sem linha de corte. */
+.lyrics-header {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  background: var(--lyrics-bg, #26313f);
+  pointer-events: none; /* deixa o scroll passar; os botões reativam abaixo */
+}
+.lyrics-label {
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+.lyrics-actions { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
+
+/* Botões circulares do cabeçalho (iguais aos da referência) */
+.lyrics-act {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.32);
+  color: rgba(255, 255, 255, 0.92);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.lyrics-act:hover { background: rgba(0, 0, 0, 0.5); color: #fff; }
+.lyrics-act:active { transform: scale(0.92); }
+.lyrics-act.hidden { display: none; }
+.lyrics-act.on { color: var(--green); }
+.lyrics-translate.busy { opacity: 0.6; pointer-events: none; }
+.lyrics-translate.busy svg { animation: lyricsSpin 0.8s linear infinite; }
+@keyframes lyricsSpin { to { transform: rotate(360deg); } }
+
 .lyrics-line {
-  font-size: 19px;
+  font-size: 21px;
   line-height: 1.5;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.5);
-  padding: 5px 10px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.42);
+  padding: 6px 8px;
   border-radius: 8px;
   transform-origin: left center;
   transition: color 0.25s ease, transform 0.25s ease, background-color 0.2s ease;
 }
-.lyrics-line.past { color: rgba(255, 255, 255, 0.85); }
-.lyrics-line.active { color: #ffffff; transform: scale(1.02); text-shadow: 0 1px 8px rgba(0, 0, 0, 0.35); }
+.lyrics-line.past { color: rgba(255, 255, 255, 0.72); }
+.lyrics-line.active { color: #ffffff; transform: scale(1.02); text-shadow: 0 1px 10px rgba(0, 0, 0, 0.4); }
 .lyrics-line.seekable { cursor: pointer; }
 .lyrics-line.seekable:hover { color: #ffffff; background: rgba(0, 0, 0, 0.18); }
 
 .lyrics-plain {
-  font-size: 15px;
-  line-height: 1.8;
-  color: rgba(255, 255, 255, 0.88);
+  font-size: 16px;
+  line-height: 1.85;
+  color: rgba(255, 255, 255, 0.9);
   white-space: pre-wrap;
-  padding: 2px 10px 4px;
+  padding: 2px 8px 4px;
 }
 
 .lyrics-status {
-  font-size: 13.5px;
-  color: rgba(255, 255, 255, 0.65);
-  padding: 8px 10px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  padding: 6px 8px;
 }
 
 .lyrics-credit {
-  margin-top: 8px;
-  font-size: 10.5px;
-  color: var(--text-muted);
+  /* Fica DENTRO da área rolável, ao fim da letra, com ~5 linhas de
+     distância da letra (linha ≈ 21px × 1.5 ≈ 31px → ~5 linhas ≈ 155px). */
+  margin-top: 155px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 0 8px;
 }
 .lyrics-credit.hidden { display: none; }
+
+/* Overlay de tela cheia (botão expandir) */
+.lyrics-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.lyrics-overlay.hidden { display: none; }
+.lyrics-overlay-inner {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: var(--lyrics-bg, #26313f);
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+.lyrics-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  position: relative;
+  z-index: 2;
+  background: var(--lyrics-bg, #26313f);
+}
+.lyrics-overlay-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 24px 8px;
+  -webkit-overflow-scrolling: touch;
+  /* Fade contínuo no topo, sem linha de corte */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+}
+.lyrics-overlay-scroll .lyrics-line { font-size: 26px; }
+.lyrics-overlay-scroll .lyrics-plain { font-size: 18px; }
+.lyrics-overlay .lyrics-credit { padding: 6px 20px 16px; margin: 0; }
+body.lyrics-overlay-open { overflow: hidden; }
 
 @media (prefers-reduced-motion: reduce) {
   .lyrics-line { transition: none; }
   .lyrics-line.active { transform: none; }
   .lyrics-box { transition: none; }
+  .lyrics-act:active { transform: none; }
+  .lyrics-translate.busy svg { animation: none; }
 }
 
 /* Video expandido: z-index 320 acima do expanded-player (z-index 300) */
@@ -3221,6 +3456,40 @@ body.tv-mode #player-cover { visibility: hidden; }
 }
 #tv-exit:active { transform: scale(0.9); }
 body.tv-mode #tv-exit { display: flex; }
+
+/* Indicador de avanço/retrocesso por duplo-toque no Modo TV */
+#tv-seek-hint {
+  display: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 22px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  z-index: 9;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+}
+#tv-seek-hint.left { left: 8%; right: auto; }
+#tv-seek-hint.right { right: 8%; left: auto; }
+#tv-seek-hint.show { display: flex; animation: tvSeekPulse 0.7s ease; }
+.tv-seek-ico { font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -2px; }
+.tv-seek-secs { font-size: 15px; font-weight: 700; }
+@keyframes tvSeekPulse {
+  0% { opacity: 0; transform: translateY(-50%) scale(0.85); }
+  25% { opacity: 1; transform: translateY(-50%) scale(1); }
+  75% { opacity: 1; transform: translateY(-50%) scale(1); }
+  100% { opacity: 0; transform: translateY(-50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #tv-seek-hint.show { animation: none; opacity: 1; }
+}
 
 /* ===== AdShield: cartao "Sem Anuncios e Promocoes" (Perfil) ===== */
 .adshield-card {
@@ -3772,10 +4041,51 @@ body.tv-mode #tv-exit { display: flex; }
   width: auto !important;
   height: auto !important;
   padding: 10px 18px;
-  margin-top: 14px;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
+}
+
+/* Abas do perfil do artista: Tudo / Recente / Mais tocado */
+.artist-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 16px;
+  flex-wrap: wrap;
+}
+.artist-tab {
+  padding: 7px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.22s ease, color 0.22s ease, border-color 0.22s ease;
+  white-space: nowrap;
+}
+.artist-tab:hover {
+  background: var(--green-dim);
+  color: var(--text);
+  border-color: var(--text-secondary);
+}
+.artist-tab.active {
+  background: var(--green);
+  color: var(--bg);
+  border-color: var(--green);
+}
+.artist-page.loading .artist-tabs { opacity: 0.45; pointer-events: none; }
+@media (max-width: 600px) {
+  .artist-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .artist-tabs::-webkit-scrollbar { display: none; }
+  .artist-tab { font-size: 11.5px; padding: 6px 13px; }
 }
 
 @media (max-width: 768px) {
@@ -5020,18 +5330,19 @@ body.tv-mode #tv-exit { display: flex; }
     flex-shrink: 0;
   }
   #mobile-player .mp-lyrics.hidden { display: none; }
-  #mobile-player .mp-lyrics h3 {
-    font-size: 14px;
-    font-weight: 700;
-    color: rgba(255,255,255,0.9);
-    margin: 0 0 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  #mobile-player .lyrics-scroll {
+    max-height: 340px;
+    padding: 62px 14px 16px;
+    scroll-padding-top: 66px;
+    -webkit-mask-image: linear-gradient(to bottom,
+      transparent 36px, rgba(0,0,0,0.15) 50px, #000 64px, #000 100%);
+    mask-image: linear-gradient(to bottom,
+      transparent 36px, rgba(0,0,0,0.15) 50px, #000 64px, #000 100%);
   }
-  #mobile-player .lyrics-box { max-height: 300px; padding: 16px 12px; }
-  #mobile-player .lyrics-line { font-size: 17px; }
-  #mobile-player .lyrics-sync-toggle { top: 8px; right: 8px; }
+  #mobile-player .lyrics-header { padding: 12px 14px 10px; }
+  #mobile-player .lyrics-line { font-size: 19px; }
+  #mobile-player .lyrics-label { font-size: 23px; }
+  #mobile-player .lyrics-act { width: 38px; height: 38px; }
 
   /* ---------- Relacionados ---------- */
   #mobile-player .mp-related {
@@ -5106,6 +5417,58 @@ body.tv-mode #tv-exit { display: flex; }
    Grade por modo (Vídeo/Capa/Fila) com switches iOS para escolher
    a visibilidade de "Videoclipes relacionados" e dos controles.
    ============================================ */
+/* ===== Configurações: escolha de layout do player (Clássico/Moderno) ===== */
+.layout-choice { display: flex; gap: 14px; flex-wrap: wrap; }
+.layout-opt {
+  flex: 1 1 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.layout-opt:hover { border-color: var(--text-muted); }
+.layout-opt.active { border-color: var(--green); background: rgba(10, 228, 72, 0.06); }
+.layout-opt-name { font-size: 13px; font-weight: 700; color: var(--text); }
+.layout-opt.active .layout-opt-name { color: var(--green); }
+
+/* Miniatura esquemática de cada layout */
+.layout-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 11;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+.layout-thumb .lt-video, .layout-thumb .lt-lyrics {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+.layout-thumb .lt-related { display: flex; gap: 4px; }
+.layout-thumb .lt-related i {
+  flex: 1;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+/* Clássico: vídeo grande em cima, letra abaixo, relacionados no fim */
+.layout-thumb-classic .lt-video { flex: 2.2; }
+.layout-thumb-classic .lt-lyrics { flex: 1; }
+/* Moderno: vídeo e letra lado a lado, relacionados abaixo */
+.layout-thumb-modern .lt-row { display: flex; gap: 5px; flex: 1; }
+.layout-thumb-modern .lt-row .lt-video { flex: 1.6; }
+.layout-thumb-modern .lt-row .lt-lyrics { flex: 1; }
+.layout-opt.active .layout-thumb .lt-video { background: rgba(10, 228, 72, 0.3); }
+
 .mpp-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -5159,3 +5522,92 @@ body.tv-mode #tv-exit { display: flex; }
 }
 .mpp-toggle.on { background: var(--green); }
 .mpp-toggle.on .mpp-knob { transform: translateX(17px); }
+
+/* ===== Seção "Seguindo" do Início: carrossel de círculos =====
+   Reaproveita o carrossel padrão (.pl-carousel-wrap/.pl-carousel-track,
+   com as setas de attachCarouselArrows). Cada item é um círculo com a
+   foto do perfil e o nome embaixo; clique abre o perfil do artista. */
+.follow-carousel-track { gap: 16px; align-items: flex-start; }
+.follow-chip {
+  flex: 0 0 auto;
+  width: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  scroll-snap-align: start;
+}
+.follow-avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(10, 228, 72, 0.25), rgba(255, 255, 255, 0.06));
+  color: var(--text);
+  font-size: 30px;
+  font-weight: 800;
+  border: 2px solid transparent;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.follow-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.follow-chip:hover .follow-avatar { border-color: var(--green); transform: scale(1.04); }
+.follow-name {
+  max-width: 96px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+.follow-chip:hover .follow-name { color: var(--text); }
+
+@media (max-width: 768px) {
+  .follow-carousel-track { gap: 12px; }
+  .follow-avatar { width: 72px; height: 72px; font-size: 26px; }
+  .follow-chip { width: 84px; }
+  .follow-name { max-width: 84px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .follow-avatar { transition: none; }
+  .follow-chip:hover .follow-avatar { transform: none; }
+}
+
+/* ===== Perfil do artista: ações do hero (Tocar tudo + Seguir) ===== */
+.artist-hero-actions { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.artist-follow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.artist-follow-btn:hover { border-color: var(--text); }
+.artist-follow-btn:disabled { opacity: 0.5; cursor: default; }
+.artist-follow-btn .ico-check { display: none; }
+.artist-follow-btn.following { color: var(--green); border-color: rgba(10, 228, 72, 0.55); }
+.artist-follow-btn.following .ico-plus { display: none; }
+.artist-follow-btn.following .ico-check { display: block; }
+.artist-page.loading .artist-follow-btn { opacity: 0.5; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .artist-follow-btn { transition: none; }
+}

@@ -565,6 +565,9 @@ const Reco = (function () {
       });
       row.appendChild(card);
     });
+    // Ativa as setas do carrossel (mesmo padrao de renderMixes): apos
+    // popular, com o container ja visivel e com layout disponivel.
+    if (typeof attachCarouselArrows === 'function') attachCarouselArrows(rowId.replace('-carousel', ''));
   }
 
   async function refreshAll(carouselId, rowId, sectionId) {

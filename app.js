@@ -960,6 +960,7 @@ function openExpanded() {
     updateMobileMeta();
   } else {
     expandedPlayer.classList.add('open');
+    ExpandedLayout.apply(); // aplica o layout escolhido (clássico/moderno)
     setPlayerMode(state.playerMode || 'video');
   }
   updateExpandedContext();
@@ -1777,6 +1778,7 @@ const Gallery = (function () {
       id: data.id || null,
       list: data.list || null,
       title: data.title || null,
+      cover: data.cover || null,
       addedAt: Date.now(),
     });
     if (items.length > MAX_ITEMS) items.length = MAX_ITEMS;
@@ -1866,6 +1868,64 @@ const Gallery = (function () {
 })();
 
 // ============================================
+// SEGUIR ARTISTAS
+// O usuario segue perfis de artistas (botao "Seguir" na pagina do
+// artista). Os seguidos aparecem na secao "Seguindo" do Inicio como
+// circulos com a foto do perfil e o nome; clicar abre o perfil.
+// localStorage: 'minstream_follows' (prefixo coberto pelo Takeout),
+// itens { name, avatar, followedAt }, sem duplicados (nome normalizado),
+// max 100. O avatar e persistido ao seguir e atualizado ("self-heal")
+// quando o perfil e visitado de novo com uma foto melhor disponivel.
+// ============================================
+const Follows = (function () {
+  const KEY = 'minstream_follows';
+  const MAX = 100;
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (_) { return []; }
+  }
+  function persist(list) {
+    try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (_) {}
+  }
+  function normKey(name) { return String(name || '').trim().toLowerCase(); }
+
+  function isFollowing(name) {
+    const k = normKey(name);
+    return !!k && load().some(f => normKey(f && f.name) === k);
+  }
+  function follow(name, avatar) {
+    const n = String(name || '').trim();
+    if (!n) return false;
+    const list = load();
+    const k = normKey(n);
+    if (list.some(f => normKey(f && f.name) === k)) return false;
+    list.unshift({ name: n, avatar: avatar || null, followedAt: Date.now() });
+    if (list.length > MAX) list.length = MAX;
+    persist(list);
+    return true;
+  }
+  function unfollow(name) {
+    const k = normKey(name);
+    persist(load().filter(f => normKey(f && f.name) !== k));
+  }
+  // Completa/atualiza a foto do perfil quando uma melhor for descoberta
+  function updateAvatar(name, avatar) {
+    if (!avatar) return;
+    const k = normKey(name);
+    const list = load();
+    const f = list.find(x => normKey(x && x.name) === k);
+    if (f && f.avatar !== avatar) { f.avatar = avatar; persist(list); }
+  }
+  function count() { return load().length; }
+
+  return { load, isFollowing, follow, unfollow, updateAvatar, count };
+})();
+
+// ============================================
 // BUSCA NO YOUTUBE (sem chave de API)
 // Tenta instancias publicas Piped e Invidious em ordem, com timeout,
 // e normaliza os resultados para { videoId, title, author, duration }.
@@ -1950,6 +2010,37 @@ const MobilePlayerPrefs = (function () {
   }
 
   return { load, save, isVisible, setVisible, MODES, SECTIONS };
+})();
+
+// ============================================
+// LAYOUT DO PLAYER EXPANDIDO (desktop)
+// Dois modos de visualização com as MESMAS funções e elementos:
+//  - 'classic' (padrão): vídeo/capa/fila em cima, letra abaixo,
+//    relacionados por último (layout empilhado atual);
+//  - 'modern': vídeo/capa/fila e letra lado a lado (duas colunas),
+//    com os videoclipes relacionados em largura total abaixo.
+// A escolha é do usuário (Perfil > Configurações) e persiste em
+// 'minstream_exp_layout' (prefixo coberto pelo Takeout).
+// ============================================
+const ExpandedLayout = (function () {
+  const KEY = 'minstream_exp_layout';
+  function get() {
+    try { return localStorage.getItem(KEY) === 'modern' ? 'modern' : 'classic'; }
+    catch (_) { return 'classic'; }
+  }
+  function set(mode) {
+    const m = (mode === 'modern') ? 'modern' : 'classic';
+    try { localStorage.setItem(KEY, m); } catch (_) {}
+    apply();
+    return m;
+  }
+  function isModern() { return get() === 'modern'; }
+  // Aplica a classe no player expandido desktop; o CSS faz o resto.
+  function apply() {
+    const el = document.getElementById('expanded-player');
+    if (el) el.classList.toggle('layout-modern', get() === 'modern');
+  }
+  return { get, set, isModern, apply };
 })();
 
 const AdShield = (function () {
@@ -2152,37 +2243,259 @@ async function fetchSearchPage(src, q, sort, page, nextpage) {
   return { raw: normalizeInvidious(data), nextpage: null };
 }
 
-// opts.sort: quando informado (busca da UI), respeita o filtro escolhido
-// e pagina (2 paginas) para cobrir mais faixas do artista. Sem opts, o
-// comportamento legado e mantido (1 pagina, ranking por reproducoes) —
-// e o caminho dos mixes, novidades, relacionados etc., que assim nao
-// sao afetados pelo filtro escolhido na tela de busca.
+// ============================================
+// MOTOR DE RELEVANCIA DA BUSCA (estilo Google -> YouTube)
+// A busca de texto da UI deixa de simplesmente confiar na ordem crua da
+// instancia (ou so no numero de views) e passa a ranquear por RELEVANCIA
+// real, combinando varios sinais como um buscador faz:
+//   - correspondencia da consulta: frase exata, cobertura dos termos com
+//     tolerancia a acento e a erro de digitacao, e match no artista/canal;
+//   - canal/upload oficial (VEVO / "- Topic" / "Official") — os uploads
+//     canonicos de musica que o Google prioriza;
+//   - popularidade (views em escala log, com teto: corrobora, nao domina);
+//   - concordancia entre instancias (aparecer em varias fontes reforca);
+//   - plausibilidade de duracao de musica;
+//   - leve personalizacao pelos artistas que o usuario mais toca (PlayStats).
+// Alem disso AGREGA varias instancias em paralelo e deduplica por videoId
+// (mais cobertura e robustez). Os filtros explicitos "Mais visualizado" /
+// "Mais recente" continuam mandando (applySearchSort); o motor abaixo vale
+// para "Relevancia". Os fluxos internos (mixes, novidades, relacionados,
+// tendencias, playlists dinamicas) mantem o caminho legado, intacto.
+// ============================================
+
+// Normalizacao para COMPARACAO textual (a consulta enviada a API continua a
+// original): minusculas, sem acento, sem pontuacao, espacos colapsados.
+function stripDiacritics(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function normalizeText(s) {
+  return stripDiacritics(String(s || '').toLowerCase())
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Ruido comum em titulos de musica: sai da conta de cobertura de termos
+// (a frase completa ainda casa e continua pesando).
+const SEARCH_STOPWORDS = new Set([
+  'official', 'oficial', 'video', 'videoclipe', 'audio', 'music', 'musica',
+  'hd', '4k', 'lyrics', 'lyric', 'letra', 'feat', 'ft', 'the', 'a', 'o', 'de',
+]);
+
+function tokenizeQuery(s) {
+  return normalizeText(s).split(' ').filter(t => t && t.length >= 2);
+}
+
+// Distancia de edicao <= 1 (barata, sem matriz): tolera 1 erro de digitacao.
+function editDistanceLE1(a, b) {
+  if (a === b) return true;
+  const la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0, j = 0, edits = 0;
+  while (i < la && j < lb) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (la > lb) i++;          // remocao
+    else if (lb > la) j++;     // insercao
+    else { i++; j++; }         // substituicao
+  }
+  if (i < la || j < lb) edits++;
+  return edits <= 1;
+}
+
+// Um termo casa com alguma palavra? igualdade, prefixo (>=3) ou 1 erro (>=5).
+function tokenMatchesWords(words, tok) {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w === tok) return true;
+    if (tok.length >= 3 && w.startsWith(tok)) return true;
+    if (tok.length >= 5 && Math.abs(w.length - tok.length) <= 1 && editDistanceLE1(w, tok)) return true;
+  }
+  return false;
+}
+
+// Pontua um resultado quanto a relevancia para a consulta
+function scoreRelevance(it, ctx) {
+  const title = normalizeText(it.title || '');
+  const author = normalizeText(it.author || '');
+  const hay = title + ' ' + author;
+  const nq = ctx.nq;
+  let s = 0;
+
+  // 1) Correspondencia de frase (mais forte quanto mais exata)
+  if (nq) {
+    if (title === nq) s += 60;
+    else if (title.startsWith(nq)) s += 34;
+    else if (title.includes(nq)) s += 24;
+    else if (hay.includes(nq)) s += 14;
+  }
+
+  // 2) Cobertura dos termos (titulo + artista), com fuzzy
+  const titleWords = title ? title.split(' ') : [];
+  const authorWords = author ? author.split(' ') : [];
+  let covered = 0, authorHits = 0;
+  ctx.tokens.forEach(tok => {
+    if (tokenMatchesWords(titleWords, tok)) covered++;
+    else if (tokenMatchesWords(authorWords, tok)) { covered++; authorHits++; }
+  });
+  const coverage = ctx.tokens.length ? covered / ctx.tokens.length : 0;
+  s += coverage * 40;
+  if (ctx.tokens.length && coverage === 1) s += 12;
+  s += authorHits * 4;
+
+  // 3) Canal/upload oficial (uploads canonicos de musica)
+  if (/vevo$/.test(author) || / - topic$/.test(author) || author.includes('official')) s += 8;
+  if (/(official\s+(video|audio|music\s*video))|(video\s+oficial|audio\s+oficial|clipe\s+oficial)/.test(title)) s += 6;
+
+  // 4) Popularidade (log, teto baixo)
+  const views = it.views || 0;
+  if (views > 0) s += Math.min(18, Math.log10(views + 1) * 2.2);
+
+  // 5) Concordancia entre instancias
+  if (ctx.maxAgree > 1 && it._count > 1) s += ((it._count - 1) / (ctx.maxAgree - 1)) * 8;
+
+  // 6) Duracao plausivel de musica
+  const d = it.duration || 0;
+  if (d >= 60 && d <= 600) s += 4;
+  else if (d > 0 && d < 45) s -= 6;
+  else if (d > 1800) s -= 4;
+
+  // 7) Personalizacao leve: artistas mais tocados
+  if (ctx.artistPlays && it.author) {
+    const p = ctx.artistPlays.get((it.author || '').trim().toLowerCase()) || 0;
+    if (p > 0) s += Math.min(6, Math.log2(p + 1) * 1.5);
+  }
+
+  // 8) Penalidades leves para ruido nao solicitado
+  if (!nq.includes('reaction') && !nq.includes('reagindo') && /\breaction\b|reagindo/.test(title)) s -= 5;
+  if (!/(\b1\s*hour\b|\b1h\b|\bloop\b|\bhoras?\b)/.test(nq) && /(1\s*hour|1h\s*loop|10\s*hours|\bloop\b)/.test(title)) s -= 4;
+
+  return s;
+}
+
+// Ranqueia por relevancia (estavel; desempate por views e ordem original)
+function rankByRelevance(items, query) {
+  const nq = normalizeText(query);
+  let tokens = tokenizeQuery(query).filter(t => !SEARCH_STOPWORDS.has(t));
+  if (!tokens.length) tokens = tokenizeQuery(query); // consulta so de stopwords
+  const ctx = {
+    nq,
+    tokens,
+    maxAgree: items.reduce((m, it) => Math.max(m, it._count || 1), 1),
+    artistPlays: (typeof PlayStats !== 'undefined' && PlayStats.artistPlays) ? PlayStats.artistPlays() : null,
+  };
+  return items
+    .map((it, i) => ({ it, i, s: scoreRelevance(it, ctx) }))
+    .sort((a, b) => (b.s - a.s) || ((b.it.views || 0) - (a.it.views || 0)) || (a.i - b.i))
+    .map(x => x.it);
+}
+
+// Busca todas as paginas de UMA instancia (deduplicando dentro dela)
+async function fetchSourcePages(src, q, sort, maxPages) {
+  const seen = new Set();
+  const collected = [];
+  let nextpage = null;
+  for (let page = 1; page <= maxPages; page++) {
+    let out;
+    try { out = await fetchSearchPage(src, q, sort, page, nextpage); }
+    catch (_) { break; } // pagina extra falhou: segue com o que ja tem
+    nextpage = out.nextpage;
+    out.raw.forEach(it => {
+      if (!seen.has(it.videoId)) { seen.add(it.videoId); collected.push(it); }
+    });
+    if (src.kind === 'piped' && !nextpage) break; // sem mais paginas
+    if (!out.raw.length) break;
+  }
+  return collected;
+}
+
+const SEARCH_AGG_INSTANCES = 3;   // instancias consultadas em paralelo (UI)
+const SEARCH_AGG_DEADLINE = 6500; // teto de espera antes de usar o parcial
+
+// Agrega varias instancias em paralelo e funde por videoId, guardando o
+// sinal de concordancia (_count). Resolve cedo quando ja ha resultado de
+// sobra, sem esperar as instancias mais lentas.
+async function aggregateSearch(q, sort, maxPages) {
+  const picked = YT_SEARCH_SOURCES.slice(0, SEARCH_AGG_INSTANCES);
+  const merged = new Map();
+  let done = 0, earlyResolve;
+  const early = new Promise(r => { earlyResolve = r; });
+  const absorb = (list) => {
+    (list || []).forEach((it, idx) => {
+      const ex = merged.get(it.videoId);
+      if (!ex) {
+        merged.set(it.videoId, Object.assign({}, it, { _count: 1, _rankSum: idx }));
+      } else {
+        ex._count += 1;
+        ex._rankSum += idx;
+        if ((it.views || 0) > (ex.views || 0)) ex.views = it.views;
+        if (!ex.author && it.author) ex.author = it.author;
+        if (!ex.duration && it.duration) ex.duration = it.duration;
+        if (!ex.channelId && it.channelId) ex.channelId = it.channelId;
+        if (!ex.published && it.published) { ex.published = it.published; ex.publishedText = it.publishedText || ex.publishedText; }
+      }
+    });
+  };
+  const tasks = picked.map(src =>
+    fetchSourcePages(src, q, sort, maxPages)
+      .then(absorb).catch(() => {})
+      .finally(() => {
+        done++;
+        if ((done >= 2 && merged.size >= 12) || done >= picked.length) earlyResolve();
+      })
+  );
+  const all = Promise.allSettled(tasks);
+  await Promise.race([early, all, new Promise(r => setTimeout(r, SEARCH_AGG_DEADLINE))]);
+  if (!merged.size) await all; // todas so lentas: espera o ciclo completo
+  return [...merged.values()];
+}
+
+// Remove os campos internos de agregacao antes de devolver/cachear
+function stripAggFields(r) {
+  if (r && (r._count !== undefined || r._rankSum !== undefined)) {
+    const c = Object.assign({}, r);
+    delete c._count; delete c._rankSum;
+    return c;
+  }
+  return r;
+}
+
+// opts.sort: quando informado (busca da UI) usa o MOTOR DE RELEVANCIA com
+// agregacao de instancias e ranqueamento por relevancia/views/data. Sem
+// opts, mantem o caminho legado (1a instancia que responde, ranking por
+// reproducoes) — usado por mixes, novidades, relacionados, tendencias e
+// playlists dinamicas, que fazem muitas chamadas em lote.
 async function searchYouTube(query, opts) {
-  const q = query.trim();
+  const q = (query || '').trim();
+  if (!q) return [];
   const sort = (opts && opts.sort) || 'plays';
-  const maxPages = (opts && opts.sort) ? 2 : 1;
-  const cap = (opts && opts.sort) ? 30 : 12;
-  const cacheKey = q + '|sort=' + sort;
+  const isUi = !!(opts && opts.sort);
+  const maxPages = isUi ? 2 : 1;
+  const cap = isUi ? 30 : 12;
+  const cacheKey = normalizeText(q) + '|sort=' + sort;
   if (ytSearchCache.has(cacheKey)) return ytSearchCache.get(cacheKey);
 
+  // Caminho da UI: agrega instancias, deduplica e ranqueia pelo motor.
+  if (isUi) {
+    let items = [];
+    try { items = AdShield.filter(await aggregateSearch(q, sort, maxPages)); }
+    catch (_) { items = []; }
+    if (items.length) {
+      const ordered = (sort === 'views' || sort === 'date')
+        ? applySearchSort(items, sort)
+        : rankByRelevance(items, q); // 'relevance'
+      const top = ordered.slice(0, cap).map(stripAggFields);
+      ytSearchCache.set(cacheKey, top);
+      return top;
+    }
+    ytSearchCache.set(cacheKey, []);
+    return [];
+  }
+
+  // Caminho interno (legado): 1a instancia que devolve resultado.
   for (const src of YT_SEARCH_SOURCES) {
     try {
-      const seen = new Set();
-      const collected = [];
-      let nextpage = null;
-      for (let page = 1; page <= maxPages; page++) {
-        let out;
-        try { out = await fetchSearchPage(src, q, sort, page, nextpage); }
-        catch (_) { break; } // pagina extra falhou: segue com o que ja tem
-        nextpage = out.nextpage;
-        out.raw.forEach(it => {
-          if (!seen.has(it.videoId)) { seen.add(it.videoId); collected.push(it); }
-        });
-        if (src.kind === 'piped' && !nextpage) break; // sem mais paginas
-        if (!out.raw.length) break;
-      }
-      // Mecanismo sem anuncios: filtra promocoes/patrocinados na origem.
-      const items = AdShield.filter(collected);
+      const items = AdShield.filter(await fetchSourcePages(src, q, sort, maxPages));
       if (items.length) {
         const top = applySearchSort(items, sort).slice(0, cap);
         ytSearchCache.set(cacheKey, top);
@@ -2477,6 +2790,12 @@ async function fetchShortsForUser() {
 const ytChannelSearchCache = new Map();
 const artistProfileCache = new Map(); // nome (lower) -> perfil (memoria: zera no F5)
 let currentArtistProfile = null;
+// Aba ativa do perfil do artista: 'all' (Tudo), 'recent' (Recente) ou
+// 'views' (Mais tocado). Reiniciada para 'all' a cada perfil aberto.
+let artistActiveTab = 'all';
+// Lista atualmente exibida (ja ordenada pela aba ativa) — usada tambem
+// pelo "Tocar tudo" para tocar na mesma ordem que o usuario ve.
+let artistDisplayedVideos = [];
 
 function fmtCompact(n) {
   if (!n || n <= 0) return '';
@@ -2674,24 +2993,72 @@ function ensureArtistPage() {
         <h2 class="artist-name" data-ref="name"></h2>
         <div class="artist-meta" data-ref="meta"></div>
         <p class="artist-desc" data-ref="desc" style="display:none"></p>
-        <button class="btn-play-main artist-play-all" data-ref="playAll" title="Tocar todo o conteúdo">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-          Tocar tudo
-        </button>
+        <div class="artist-hero-actions">
+          <button class="btn-play-main artist-play-all" data-ref="playAll" title="Tocar todo o conteúdo">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            Tocar tudo
+          </button>
+          <button class="artist-follow-btn" data-ref="followBtn" aria-pressed="false" title="Seguir este artista">
+            <svg class="ico-plus" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-linecap="round"/></svg>
+            <svg class="ico-check" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Seguir</span>
+          </button>
+        </div>
       </div>
     </div>
     <h3 class="section-title" data-ref="listTitle" style="margin:26px 0 4px">Conteúdo do canal</h3>
     <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 12px" data-ref="listNote"></p>
+    <div class="artist-tabs" data-ref="tabs" role="tablist" aria-label="Filtrar conteúdo do artista">
+      <button class="artist-tab active" data-tab="all" role="tab" aria-selected="true">Tudo</button>
+      <button class="artist-tab" data-tab="recent" role="tab" aria-selected="false">Recente</button>
+      <button class="artist-tab" data-tab="views" role="tab" aria-selected="false">Mais tocado</button>
+    </div>
     <div data-ref="videos"></div>
   `;
   artistPageEl.querySelectorAll('[data-ref]').forEach(el => { artistRefs[el.dataset.ref] = el; });
   // Listeners permanentes (uma unica vez, nunca re-vinculados)
   artistRefs.avatar.addEventListener('error', () => { artistRefs.avatar.style.display = 'none'; });
   artistRefs.playAll.addEventListener('click', () => {
-    const v = currentArtistProfile && currentArtistProfile.videos;
+    // Toca respeitando a aba ativa (ordem exibida): "Tocar tudo" segue o
+    // que o usuario esta vendo — Tudo, Recente ou Mais tocado.
+    const v = (artistDisplayedVideos && artistDisplayedVideos.length)
+      ? artistDisplayedVideos
+      : (currentArtistProfile && currentArtistProfile.videos);
     if (v && v.length) playYouTubeResult(v[0], v);
   });
+  // Abas Tudo / Recente / Mais tocado (delegacao, vinculada uma unica vez)
+  artistRefs.tabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('.artist-tab');
+    if (!btn || btn.classList.contains('active')) return;
+    setArtistTab(btn.dataset.tab);
+  });
+  artistRefs.followBtn.addEventListener('click', () => {
+    const p = currentArtistProfile;
+    if (!p || !p.name) return;
+    if (Follows.isFollowing(p.name)) {
+      Follows.unfollow(p.name);
+      showToast('Você deixou de seguir ' + p.name + '.');
+    } else {
+      Follows.follow(p.name, p.avatar || null);
+      showToast('Seguindo ' + p.name + '! O perfil aparece na seção "Seguindo" do Início.');
+    }
+    updateArtistFollowBtn();
+    // Reflete na hora caso a Home esteja montada (a funcao ignora se nao houver)
+    if (typeof renderHomeFollows === 'function') renderHomeFollows();
+  });
   return artistPageEl;
+}
+
+// Estado visual do botao Seguir conforme o perfil atual
+function updateArtistFollowBtn() {
+  if (!artistRefs.followBtn) return;
+  const p = currentArtistProfile;
+  const on = !!(p && p.name && Follows.isFollowing(p.name));
+  artistRefs.followBtn.classList.toggle('following', on);
+  artistRefs.followBtn.setAttribute('aria-pressed', String(on));
+  const lab = artistRefs.followBtn.querySelector('span');
+  if (lab) lab.textContent = on ? 'Seguindo' : 'Seguir';
+  artistRefs.followBtn.title = on ? 'Deixar de seguir este artista' : 'Seguir este artista';
 }
 
 // Anexa a estrutura (se ainda nao estiver no main) e entra em modo skeleton
@@ -2708,8 +3075,20 @@ function showArtistSkeleton(name) {
   artistRefs.desc.style.display = 'none';
   artistRefs.desc.textContent = '';
   artistRefs.playAll.disabled = true;
+  artistRefs.followBtn.disabled = true;
   artistRefs.listTitle.textContent = 'Conteúdo do canal';
   artistRefs.listNote.textContent = '';
+  // Abas voltam a "Tudo" no carregamento (sem renderizar: o perfil anterior
+  // ainda pode estar em memoria; renderArtistView chama setArtistTab depois)
+  artistActiveTab = 'all';
+  artistDisplayedVideos = [];
+  if (artistRefs.tabs) {
+    artistRefs.tabs.querySelectorAll('.artist-tab').forEach(b => {
+      const on = b.dataset.tab === 'all';
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+  }
   // Linhas fantasma no lugar da lista (shimmer)
   artistRefs.videos.innerHTML = '<div class="track-skel"></div>'.repeat(6);
 }
@@ -2776,11 +3155,78 @@ function renderArtistView() {
     artistRefs.desc.style.display = 'none';
   }
   artistRefs.playAll.disabled = !videos.length;
+  artistRefs.followBtn.disabled = false;
+  // Se o usuario ja segue este artista, aproveita a visita para
+  // completar/atualizar a foto do perfil persistida
+  Follows.updateAvatar(p.name, p.avatar || null);
+  updateArtistFollowBtn();
   artistRefs.listTitle.textContent = p.fromSearch ? 'Conteúdo do artista' : 'Conteúdo do canal';
-  artistRefs.listNote.textContent = p.fromSearch
-    ? 'O canal do artista está temporariamente inacessível; exibindo o conteúdo dele encontrado na busca, do mais reproduzido para o menos.'
-    : 'Do mais reproduzido para o menos (acurácia por reproduções).';
-  renderYtSearchResults(artistRefs.videos, videos);
+  // Reinicia as abas em "Tudo" a cada perfil aberto; setArtistTab cuida da
+  // nota e de renderizar a lista ja ordenada pela aba.
+  setArtistTab('all');
+}
+
+// Ordena uma copia dos videos do artista conforme a aba:
+//   'all'    -> ordem padrao (como o perfil veio: mais reproduzidos primeiro)
+//   'recent' -> mais recentes primeiro (timestamp `published`; sem data ao fim)
+//   'views'  -> mais reproduzidos primeiro (views). Empates preservam a ordem.
+function sortArtistVideos(videos, tab) {
+  const list = (videos || []).slice();
+  if (tab === 'recent') {
+    return list
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => ((b.it.published || 0) - (a.it.published || 0)) || (a.i - b.i))
+      .map(x => x.it);
+  }
+  if (tab === 'views') {
+    return list
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => ((b.it.views || 0) - (a.it.views || 0)) || (a.i - b.i))
+      .map(x => x.it);
+  }
+  return list; // 'all'
+}
+
+// Texto de apoio sob o titulo, conforme a aba ativa
+function artistTabNote(tab, fromSearch) {
+  if (tab === 'recent') {
+    return fromSearch
+      ? 'Conteúdo do artista encontrado na busca, do mais recente para o mais antigo.'
+      : 'Do mais recente para o mais antigo (data de publicação).';
+  }
+  if (tab === 'views') {
+    return fromSearch
+      ? 'Conteúdo do artista encontrado na busca, do mais reproduzido para o menos.'
+      : 'Do mais reproduzido para o menos (acurácia por reproduções).';
+  }
+  return fromSearch
+    ? 'O canal do artista está temporariamente inacessível; exibindo todo o conteúdo dele encontrado na busca.'
+    : 'Todo o conteúdo do canal, do mais reproduzido para o menos.';
+}
+
+// Ativa uma aba, sincroniza o visual dos botoes e re-renderiza a lista
+function setArtistTab(tab) {
+  artistActiveTab = tab;
+  if (artistRefs.tabs) {
+    artistRefs.tabs.querySelectorAll('.artist-tab').forEach(b => {
+      const on = b.dataset.tab === tab;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+  }
+  renderArtistVideos();
+}
+
+// Ordena pela aba ativa, atualiza a nota e desenha a lista de videos.
+// Guarda a ordem exibida para o "Tocar tudo" seguir a mesma sequencia.
+function renderArtistVideos() {
+  const p = currentArtistProfile;
+  if (!p || !artistRefs.videos) return;
+  artistDisplayedVideos = sortArtistVideos(p.videos || [], artistActiveTab);
+  if (artistRefs.listNote) {
+    artistRefs.listNote.textContent = artistTabNote(artistActiveTab, p.fromSearch);
+  }
+  renderYtSearchResults(artistRefs.videos, artistDisplayedVideos);
 }
 
 // ============================================
@@ -3368,6 +3814,7 @@ const Takeout = (function () {
     'vibefm_gallery': (l, i) => unionArrays(l, i, it => ((it && it.id) || '') + '|' + ((it && it.list) || ''), 60),
     'vibefm_gallery_pinned': (l, i) => unionArrays(l, i, x => String(x), 0),
     'vibefm_gallery_home_hidden': (l, i) => unionArrays(l, i, x => String(x), 0),
+    'minstream_follows': (l, i) => unionArrays(l, i, f => String((f && f.name) || '').trim().toLowerCase(), 100),
     'minstream_search_history': (l, i) => unionArrays(l, i, x => String(x).toLowerCase(), 5),
     'vibefm_adshield_stats': sumCounter,
     'vibefm_profile': mergeObjectAddMissing,
@@ -3940,11 +4387,68 @@ function renderHomeSaved() {
   items.forEach(item => track.appendChild(createGalleryCard(item, renderHomeSaved, 'hideFromHome')));
 }
 
+// ============================================
+// SECAO "SEGUINDO" DO INICIO
+// Carrossel de artistas seguidos no topo da Home: cada item e um circulo
+// com a foto do perfil e o nome embaixo; clicar abre o perfil. A secao
+// fica oculta enquanto nao houver ninguem seguido. Usa as setas do
+// carrossel padrao (attachCarouselArrows) via o prefixo 'home-follows'.
+// ============================================
+function renderHomeFollows() {
+  const section = document.getElementById('home-follows-section');
+  const track = document.getElementById('home-follows-carousel');
+  if (!section || !track) return;
+  const follows = Follows.load();
+  if (!follows.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  track.replaceChildren();
+  follows.forEach(f => {
+    if (!f || !f.name) return;
+    const chip = document.createElement('button');
+    chip.className = 'follow-chip';
+    chip.title = 'Abrir o perfil de ' + f.name;
+    const av = document.createElement('div');
+    av.className = 'follow-avatar';
+    const showInitial = () => { av.textContent = (f.name.trim().charAt(0) || '?').toUpperCase(); };
+    if (f.avatar) {
+      const img = document.createElement('img');
+      img.src = f.avatar;
+      img.alt = '';
+      img.loading = 'lazy'; img.decoding = 'async';
+      img.addEventListener('error', () => { img.remove(); showInitial(); });
+      av.appendChild(img);
+    } else {
+      showInitial();
+    }
+    const nm = document.createElement('div');
+    nm.className = 'follow-name';
+    nm.textContent = f.name;
+    chip.appendChild(av);
+    chip.appendChild(nm);
+    chip.addEventListener('click', () => openArtistProfile(f.name));
+    track.appendChild(chip);
+  });
+}
+
 function renderHome() {
   const userPls = UserPlaylists.load();
   const tastes = Tastes.load();
 
   main.innerHTML = `
+    <div class="section" id="home-follows-section" style="display:none">
+      <div class="section-header pl-home-header">
+        <h2 class="section-title">Seguindo</h2>
+      </div>
+      <div class="pl-carousel-wrap follow-carousel-wrap" id="home-follows-wrap">
+        <button class="pl-carousel-arrow pl-carousel-prev" id="home-follows-prev" title="Anterior">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="pl-carousel-track follow-carousel-track" id="home-follows-carousel"></div>
+        <button class="pl-carousel-arrow pl-carousel-next" id="home-follows-next" title="Próximo">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
     <div class="section">
       <div class="section-header pl-home-header">
         <h2 class="section-title">Suas Playlists</h2>
@@ -3965,7 +4469,6 @@ function renderHome() {
           Editar gostos
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Playlists geradas dinamicamente a partir dos seus gêneros favoritos.</p>
       ${buildCarousel('home-dyn-pl', 'home-dyn-pl-carousel')}
     </div>
     <div class="section" id="reco-mix-section">
@@ -3976,7 +4479,6 @@ function renderHome() {
           Atualizar
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Mixes diversos a partir das suas curtidas, do que você ouve e dos seus gostos.</p>
       <div class="pl-carousel-wrap" id="reco-mix-wrap">
         <button class="pl-carousel-arrow pl-carousel-prev" id="reco-mix-prev" title="Anterior"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="pl-carousel-track" id="reco-mix-carousel"><p style="font-size:12px;color:var(--text-muted)">Gerando seus mixes\u2026</p></div>
@@ -3991,7 +4493,6 @@ function renderHome() {
           Ver todos
         </button>
       </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">Seus vídeos e playlists salvos. Fixe os favoritos para mantê-los no topo.</p>
       <div class="pl-carousel-wrap" id="home-saved-wrap">
         <button class="pl-carousel-arrow pl-carousel-prev" id="home-saved-prev" title="Anterior"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="pl-carousel-track" id="home-saved-carousel"></div>
@@ -3999,20 +4500,29 @@ function renderHome() {
       </div>
     </div>
     <div class="section" id="reco-news-section" style="display:none">
-      <h2 class="section-title" style="margin-bottom:6px">Novidades para Você</h2>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px">Lançamentos recentes dos artistas e gêneros que você curte.</p>
-      <div class="exp-related-row" id="reco-news-row"></div>
+      <h2 class="section-title" style="margin-bottom:14px">Novidades para Você</h2>
+      <div class="pl-carousel-wrap" id="reco-news-wrap">
+        <button class="pl-carousel-arrow pl-carousel-prev" id="reco-news-prev" title="Anterior"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="pl-carousel-track" id="reco-news-carousel"></div>
+        <button class="pl-carousel-arrow pl-carousel-next" id="reco-news-next" title="Próximo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
     </div>
   `;
+
+  // Secao "Seguindo" no topo (carrossel de artistas seguidos)
+  renderHomeFollows();
+  attachCarouselArrows('home-follows');
 
   // Renderiza playlists do usuario como cards no carrossel
   const userCarousel = document.getElementById('home-user-pl-carousel');
   if (userCarousel) {
-    // "Curtidas" sempre em primeiro
-    userCarousel.appendChild(createPlaylistCard(likedPlaylistConfig()));
+    // Ordem em "Suas Playlists": Recentes primeiro, depois Curtidas e, por
+    // fim, as demais playlists do usuario.
     // Pasta "Recentes": aparece so quando ja houve reproducao
     const recentFolder = createRecentFolderCard();
     if (recentFolder) userCarousel.appendChild(recentFolder);
+    // "Curtidas" (playlist virtual dos likes) logo em seguida
+    userCarousel.appendChild(createPlaylistCard(likedPlaylistConfig()));
     userPls.forEach(pl => {
       const tracks = UserPlaylists.tracksOf(pl);
       const card = createPlaylistCard({
@@ -4104,11 +4614,11 @@ function renderHome() {
   // Recomendacoes inteligentes: mixes diversos + novidades (assincrono)
   if (typeof Reco !== 'undefined') {
     Reco.renderMixes('reco-mix-carousel');
-    Reco.renderNews('reco-news-row', 'reco-news-section');
+    Reco.renderNews('reco-news-carousel', 'reco-news-section');
     const refreshBtn = document.getElementById('btn-refresh-reco');
     if (refreshBtn) refreshBtn.addEventListener('click', () => {
       refreshBtn.disabled = true;
-      Reco.refreshAll('reco-mix-carousel', 'reco-news-row', 'reco-news-section')
+      Reco.refreshAll('reco-mix-carousel', 'reco-news-carousel', 'reco-news-section')
         .finally(() => { refreshBtn.disabled = false; });
     });
   }
@@ -4712,16 +5222,56 @@ async function performSearch(raw) {
         });
       }
 
+      // Playlists: mostra o nome e a capa reais no preview e aquece o
+      // cache de metadados, para o Salvar ja persistir tudo com o item
+      if (playlistId) {
+        fetchPlaylistMeta(playlistId).then(meta => {
+          if (!meta || videoId) return; // com video, o oEmbed acima prevalece
+          if (meta.title) {
+            const metaEl = document.getElementById('url-meta');
+            if (metaEl) metaEl.innerHTML = `<strong>${escapeHtml(meta.title)}</strong><br><span style="color:var(--text-secondary)">Playlist do YouTube</span>`;
+          }
+          if (meta.cover) {
+            const img = document.getElementById('url-preview-img');
+            if (img) img.src = meta.cover;
+          }
+        });
+      }
+
       document.getElementById('url-play-btn').addEventListener('click', () => {
         playFromUrl(raw);
       });
 
       document.getElementById('url-save-btn').addEventListener('click', () => {
-        Gallery.save({
+        // Salva ja com nome e capa quando os metadados estao em cache
+        const cachedMeta = playlistId ? playlistMetaCache.get(playlistId) : null;
+        const ok = Gallery.save({
           id: videoId,
           list: playlistId,
-          title: videoId ? titleCache.get(videoId) || null : null,
+          title: videoId
+            ? (titleCache.get(videoId) || null)
+            : ((cachedMeta && cachedMeta.title) || null),
+          cover: (!videoId && cachedMeta && cachedMeta.cover) || null,
         });
+        if (!ok) return;
+
+        // O que ainda nao chegou e buscado agora e persistido no item —
+        // o cartao em "Links Salvos" nasce com nome e capa, sem depender
+        // de uma nova busca de metadados a cada renderizacao
+        const key = (videoId || '') + '|' + (playlistId || '');
+        if (videoId && !titleCache.get(videoId)) {
+          fetchOembed(videoId).then(() => {
+            const t = titleCache.get(videoId);
+            if (t) Gallery.updateTitle(key, t);
+          });
+        }
+        if (playlistId && !(cachedMeta && cachedMeta.title && cachedMeta.cover)) {
+          fetchPlaylistMeta(playlistId).then(meta => {
+            if (!meta) return;
+            if (meta.title) Gallery.updateTitle(key, meta.title);
+            if (meta.cover) Gallery.updateCover(key, meta.cover);
+          });
+        }
       });
 
       return;
@@ -5227,6 +5777,7 @@ function renderProfile() {
   // ---------- Conteudo: secao CONFIGURACOES ----------
   // Preferencia da letra sincronizada (modulo Lyrics em lyrics.js)
   const lyricsOn = (typeof Lyrics !== 'undefined') ? Lyrics.enabled() : true;
+  const expLayout = (typeof ExpandedLayout !== 'undefined') ? ExpandedLayout.get() : 'classic';
   const settingsHtml = `
     <div class="psec-block" style="margin-top:0">
       <h4 class="psec-subtitle">Sem Anúncios e Promoções</h4>
@@ -5270,6 +5821,26 @@ function renderProfile() {
           <div class="adshield-sub">${lyricsOn ? 'Sincronização automática via LRCLIB' : 'A seção de letra não é exibida nos players'}</div>
         </div>
         <button class="pl-action-btn" id="lyrics-toggle">${lyricsOn ? 'Desativar' : 'Ativar'}</button>
+      </div>
+    </div>
+
+    <div class="psec-block">
+      <h4 class="psec-subtitle">Layout do player (desktop)</h4>
+      <p class="psec-desc">Escolha como o player expandido organiza as informações no computador. No <strong>Clássico</strong>, o vídeo fica em cima e a letra logo abaixo. No <strong>Moderno</strong>, o vídeo e a letra aparecem <strong>lado a lado</strong>, com os videoclipes relacionados abaixo. As duas formas têm exatamente as mesmas funções — muda só a disposição.</p>
+      <div class="layout-choice" id="layout-choice">
+        <button class="layout-opt ${expLayout === 'classic' ? 'active' : ''}" data-layout="classic" aria-pressed="${expLayout === 'classic'}">
+          <span class="layout-thumb layout-thumb-classic" aria-hidden="true">
+            <span class="lt-video"></span><span class="lt-lyrics"></span><span class="lt-related"><i></i><i></i><i></i></span>
+          </span>
+          <span class="layout-opt-name">Clássico</span>
+        </button>
+        <button class="layout-opt ${expLayout === 'modern' ? 'active' : ''}" data-layout="modern" aria-pressed="${expLayout === 'modern'}">
+          <span class="layout-thumb layout-thumb-modern" aria-hidden="true">
+            <span class="lt-row"><span class="lt-video"></span><span class="lt-lyrics"></span></span>
+            <span class="lt-related"><i></i><i></i><i></i></span>
+          </span>
+          <span class="layout-opt-name">Moderno</span>
+        </button>
       </div>
     </div>
 
@@ -5541,6 +6112,27 @@ function renderProfile() {
       ? 'Letra da música ativada nos players'
       : 'Letra da música oculta nos players');
   });
+
+  // ----- Configuracoes: layout do player expandido (desktop) -----
+  const layoutChoice = document.getElementById('layout-choice');
+  if (layoutChoice && typeof ExpandedLayout !== 'undefined') {
+    layoutChoice.querySelectorAll('.layout-opt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.layout;
+        if (mode === ExpandedLayout.get()) return;
+        ExpandedLayout.set(mode); // persiste e aplica na hora (se aberto)
+        // Atualiza o estado visual dos botões sem re-render pesado
+        layoutChoice.querySelectorAll('.layout-opt').forEach(b => {
+          const on = b.dataset.layout === mode;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-pressed', String(on));
+        });
+        showToast(mode === 'modern'
+          ? 'Layout Moderno ativado: vídeo e letra lado a lado'
+          : 'Layout Clássico ativado');
+      });
+    });
+  }
 
   // ----- Configuracoes: toggles de exibicao do player mobile -----
   const mppGrid = document.getElementById('mpp-grid');
@@ -6038,6 +6630,125 @@ function exitTvMode() {
 }
 
 function toggleTvMode() { isTvMode() ? exitTvMode() : enterTvMode(); }
+
+// ===== GESTOS DO MODO TV (mobile) =====
+// Sobre a tela cheia do vídeo:
+//  - 1 toque simples  -> play/pause;
+//  - 2 toques no lado DIREITO -> avança 5s (acumulativo: toques seguidos
+//    somam +5s, +10s, +15s…);
+//  - 2 toques no lado ESQUERDO -> retrocede 5s (idem, acumulativo).
+// O duplo-toque é detectado por proximidade temporal + espacial; um toque
+// solto (sem segundo toque dentro da janela) vira play/pause.
+(function initTvGestures() {
+  if (!videoCover) return;
+
+  const DOUBLE_MS = 300;   // janela p/ considerar "duplo toque"
+  const MOVE_TOL = 30;     // tolerância de movimento entre toques (px)
+  const STEP = 5;          // segundos por duplo-toque
+  const ACCUM_MS = 800;    // janela p/ acumular seeks consecutivos
+  const HINT_MS = 700;     // duração do indicador visual
+
+  let lastTapTime = 0;
+  let lastTapX = 0, lastTapY = 0;
+  let lastTapSide = null;
+  let singleTimer = null;
+
+  // Acúmulo de seek: enquanto o usuário continua o duplo-toque no mesmo
+  // lado dentro de ACCUM_MS, o total exibido cresce (5,10,15…).
+  let accumSide = null;
+  let accumSecs = 0;
+  let accumResetTimer = null;
+
+  function liveTimeSec() {
+    try {
+      if (ytPlayer && state.apiReady && ytPlayer.getCurrentTime) {
+        const t = ytPlayer.getCurrentTime();
+        if (typeof t === 'number' && isFinite(t)) return t;
+      }
+    } catch (_) {}
+    return state.currentTime || 0;
+  }
+
+  // Aplica o seek de forma incremental (cada duplo-toque já mexe no vídeo),
+  // mantendo o rótulo acumulado visível (+5s, +10s…).
+  function doSeek(side) {
+    const dir = side === 'right' ? 1 : -1;
+    const dur = state.duration || 0;
+
+    if (accumSide !== side) { accumSide = side; accumSecs = 0; }
+    accumSecs += STEP;
+
+    let target = liveTimeSec() + dir * STEP;
+    if (target < 0) target = 0;
+    if (dur > 0 && target > dur) target = dur;
+    seekToTime(target);
+
+    showTvSeekHint(side, accumSecs);
+
+    // Reinicia a janela de acumulação a cada toque
+    if (accumResetTimer) clearTimeout(accumResetTimer);
+    accumResetTimer = setTimeout(() => { accumSide = null; accumSecs = 0; }, ACCUM_MS);
+  }
+
+  // Indicador visual (setas + total) nas laterais
+  let hintEl = null, hintTimer = null;
+  function ensureHint() {
+    if (hintEl) return hintEl;
+    hintEl = document.createElement('div');
+    hintEl.id = 'tv-seek-hint';
+    hintEl.innerHTML = '<span class="tv-seek-ico"></span><span class="tv-seek-secs"></span>';
+    videoCover.appendChild(hintEl);
+    return hintEl;
+  }
+  function showTvSeekHint(side, secs) {
+    const el = ensureHint();
+    el.classList.remove('left', 'right', 'show');
+    void el.offsetWidth; // reinicia a animação
+    el.classList.add(side, 'show');
+    el.querySelector('.tv-seek-ico').textContent = side === 'right' ? '»' : '«';
+    el.querySelector('.tv-seek-secs').textContent = (side === 'right' ? '+' : '−') + secs + 's';
+    if (hintTimer) clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => { if (hintEl) hintEl.classList.remove('show'); }, HINT_MS);
+  }
+
+  function sideFromX(x) {
+    const r = videoCover.getBoundingClientRect();
+    return (x - r.left) < r.width / 2 ? 'left' : 'right';
+  }
+
+  // Só atua no Modo TV; fora dele, o app segue com seus controles normais.
+  videoCover.addEventListener('pointerup', (e) => {
+    if (!isTvMode()) return;
+    // Ignora toques nos controles sobrepostos (ex.: botão Sair)
+    if (e.target && e.target.closest && e.target.closest('#tv-exit')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    const now = Date.now();
+    const x = e.clientX, y = e.clientY;
+    const side = sideFromX(x);
+    const near = Math.abs(x - lastTapX) <= MOVE_TOL && Math.abs(y - lastTapY) <= MOVE_TOL;
+    const soon = (now - lastTapTime) <= DOUBLE_MS;
+
+    if (soon && near && lastTapSide === side) {
+      // Segundo toque: é um duplo-toque no mesmo lado -> seek
+      if (singleTimer) { clearTimeout(singleTimer); singleTimer = null; }
+      doSeek(side);
+      lastTapTime = 0; // consome o par (evita triplo virar novo par)
+      lastTapSide = null;
+    } else {
+      // Primeiro toque: aguarda um possível segundo antes de decidir
+      lastTapTime = now; lastTapX = x; lastTapY = y; lastTapSide = side;
+      if (singleTimer) clearTimeout(singleTimer);
+      singleTimer = setTimeout(() => {
+        singleTimer = null;
+        togglePlay(); // toque simples -> play/pause
+      }, DOUBLE_MS);
+    }
+  });
+
+  // Evita que o duplo-toque dispare zoom/seleção no mobile
+  videoCover.addEventListener('dblclick', (e) => { if (isTvMode()) e.preventDefault(); });
+})();
 
 document.getElementById('exp-tab-tv').addEventListener('click', toggleTvMode);
 document.getElementById('tv-exit').addEventListener('click', (e) => { e.stopPropagation(); exitTvMode(); });

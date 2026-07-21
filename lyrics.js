@@ -69,14 +69,20 @@ const Lyrics = (function () {
     exp: {
       root: document.getElementById('exp-lyrics'),
       box: document.getElementById('exp-lyrics-box'),
+      scroll: document.getElementById('exp-lyrics-scroll'),
       sync: document.getElementById('exp-lyrics-sync'),
-      credit: document.getElementById('exp-lyrics-credit'),
+      translate: document.getElementById('exp-lyrics-translate'),
+      share: document.getElementById('exp-lyrics-share'),
+      expand: document.getElementById('exp-lyrics-expand'),
     },
     mp: {
       root: document.getElementById('mp-lyrics'),
       box: document.getElementById('mp-lyrics-box'),
+      scroll: document.getElementById('mp-lyrics-scroll'),
       sync: document.getElementById('mp-lyrics-sync'),
-      credit: document.getElementById('mp-lyrics-credit'),
+      translate: document.getElementById('mp-lyrics-translate'),
+      share: document.getElementById('mp-lyrics-share'),
+      expand: document.getElementById('mp-lyrics-expand'),
     },
   };
 
@@ -437,10 +443,94 @@ const Lyrics = (function () {
   let userScrollUntil = 0; // pausa o seguidor após rolagem manual
   let progScrollUntil = 0; // marca escritas de scroll do próprio módulo
   let wasOpen = false;
+  let translated = false;  // exibindo a tradução da letra?
+  const translateCache = new Map(); // texto -> tradução (por sessão)
 
   const reducedMotion = (typeof matchMedia === 'function')
     ? matchMedia('(prefers-reduced-motion: reduce)')
     : { matches: false };
+
+  // Altura do cabeçalho fixo (para o seguidor centralizar abaixo dele)
+  function headerHeight(vk) {
+    const box = els[vk] && els[vk].scroll;
+    if (!box) return 0;
+    const h = box.querySelector('.lyrics-header');
+    return h ? h.offsetHeight : 0;
+  }
+
+  // ---------------------------------------------------------------
+  // Overlay de tela cheia (botão expandir): mostra a letra em foco,
+  // com o mesmo fundo adaptativo e acompanhamento da linha ativa.
+  // ---------------------------------------------------------------
+  let overlayEl = null;
+  let overlayScroll = null;
+  let overlayLines = [];
+  let overlayActiveIdx = -1;
+
+  function buildOverlay() {
+    if (overlayEl) return overlayEl;
+    const ov = document.createElement('div');
+    ov.className = 'lyrics-overlay hidden';
+    ov.innerHTML =
+      '<div class="lyrics-overlay-inner">' +
+      '  <div class="lyrics-overlay-head">' +
+      '    <span class="lyrics-label">Letra</span>' +
+      '    <button class="lyrics-act lyrics-overlay-close" title="Fechar">' +
+      '      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
+      '    </button>' +
+      '  </div>' +
+      '  <div class="lyrics-overlay-scroll" id="lyrics-overlay-scroll"></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    overlayScroll = ov.querySelector('.lyrics-overlay-scroll');
+    ov.querySelector('.lyrics-overlay-close').addEventListener('click', closeOverlay);
+    ov.addEventListener('click', e => { if (e.target === ov) closeOverlay(); });
+    overlayScroll.addEventListener('click', e => {
+      const line = e.target && e.target.closest ? e.target.closest('.lyrics-line') : null;
+      if (!line || !line.dataset.t) return;
+      const t = parseFloat(line.dataset.t);
+      if (isFinite(t) && typeof seekToTime === 'function') { try { seekToTime(t); } catch (_) {} }
+    });
+    overlayEl = ov;
+    return ov;
+  }
+
+  function overlayOpen() { return !!(overlayEl && !overlayEl.classList.contains('hidden')); }
+
+  function fillOverlay() {
+    if (!overlayScroll) return;
+    overlayScroll.replaceChildren(buildContent(cur));
+    overlayScroll.scrollTop = 0;
+    overlayLines = Array.from(overlayScroll.querySelectorAll('.lyrics-line'));
+    overlayActiveIdx = -1;
+    // Herda o fundo adaptativo do lado visível
+    const vk = visibleSide() || 'exp';
+    const bg = els[vk] && els[vk].root && els[vk].root.style.getPropertyValue('--lyrics-bg');
+    if (overlayEl) {
+      if (bg) overlayEl.style.setProperty('--lyrics-bg', bg);
+      else overlayEl.style.removeProperty('--lyrics-bg');
+    }
+  }
+
+  function openOverlay() {
+    if (!cur || (cur.status !== 'synced' && cur.status !== 'plain')) return;
+    buildOverlay();
+    fillOverlay();
+    overlayEl.classList.remove('hidden');
+    document.body.classList.add('lyrics-overlay-open');
+  }
+
+  function closeOverlay() {
+    if (overlayEl) overlayEl.classList.add('hidden');
+    document.body.classList.remove('lyrics-overlay-open');
+  }
+
+  // Mantém o overlay em sincronia quando a faixa/letra muda com ele aberto
+  function syncOverlay() {
+    if (!overlayOpen()) return;
+    if (!cur || (cur.status !== 'synced' && cur.status !== 'plain')) { closeOverlay(); return; }
+    fillOverlay();
+  }
 
   function statusNode(text) {
     const d = document.createElement('div');
@@ -453,8 +543,18 @@ const Lyrics = (function () {
     return !!(cur && cur.status === 'synced' && syncOn());
   }
 
+  function creditNode() {
+    // Crédito ao LRCLIB DENTRO do container, ao fim da letra. A distância
+    // de ~5 linhas em relação à letra vem da classe .lyrics-credit (CSS).
+    const d = document.createElement('div');
+    d.className = 'lyrics-credit';
+    d.textContent = 'Letras fornecidas por LRCLIB';
+    return d;
+  }
+
   function buildContent(entry) {
     const frag = document.createDocumentFragment();
+    let hasLyrics = false;
     if (!entry || entry.status === 'loading' || entry.status === 'idle') {
       frag.appendChild(statusNode('Buscando letra\u2026'));
     } else if (entry.status === 'synced' && syncOn()) {
@@ -466,48 +566,72 @@ const Lyrics = (function () {
         d.textContent = l.text || '\u266A'; // pausas instrumentais viram ♪
         frag.appendChild(d);
       });
+      hasLyrics = true;
     } else if ((entry.status === 'synced' && !syncOn()) || entry.status === 'plain') {
       const d = document.createElement('div');
       d.className = 'lyrics-plain';
       d.textContent = entry.plain;
       frag.appendChild(d);
+      hasLyrics = true;
     } else if (entry.status === 'instrumental') {
       frag.appendChild(statusNode('\u266A Faixa instrumental \u2014 sem letra dispon\u00EDvel'));
     } else {
       frag.appendChild(statusNode('Sem letra dispon\u00EDvel'));
     }
+    if (hasLyrics) frag.appendChild(creditNode());
     return frag;
   }
 
   function renderCurrent() {
     activeIdx = -1;
     userScrollUntil = 0;
+    translated = false; // nova faixa/estado: volta ao texto original
     const entry = cur;
     const canSync = !!(entry && entry.status === 'synced');
     const sOn = syncOn();
     const hasLyrics = !!(entry && (entry.status === 'synced' || entry.status === 'plain'));
 
+    // DESKTOP: quando a busca resolve e NAO ha letra para exibir
+    // ("Sem letra disponivel" ou faixa instrumental), o container inteiro
+    // some — o palco fica centralizado e a pagina nao mostra um cartao
+    // vazio so com o aviso. A classe so vai no container desktop
+    // (#exp-lyrics): o player mobile mantem o aviso visivel, como antes.
+    // Se a proxima faixa tiver letra, a classe sai aqui mesmo e o
+    // container reaparece sozinho. A preferencia do usuario
+    // (Perfil > Configuracoes) continua mandando via .hidden.
+    const noLyrics = !!entry && (entry.status === 'none' || entry.status === 'instrumental');
+    if (els.exp.root) els.exp.root.classList.toggle('lyrics-none', noLyrics);
+
     eachSide(side => {
-      if (!side.box) return;
-      side.box.replaceChildren(buildContent(entry));
-      side.box.scrollTop = 0;
-      // Alternador com/sem sincronização (canto superior direito do container):
-      // aparece apenas quando existe letra sincronizada para alternar
+      if (!side.scroll) return;
+      side.scroll.replaceChildren(buildContent(entry));
+      side.scroll.scrollTop = 0;
+      // Botão de sincronização (ícone): só quando há letra sincronizada
       if (side.sync) {
         side.sync.classList.toggle('hidden', !canSync);
         side.sync.classList.toggle('on', canSync && sOn);
         side.sync.setAttribute('aria-pressed', String(canSync && sOn));
-        const lab = side.sync.querySelector('span');
-        if (lab) lab.textContent = sOn ? 'Sincronizada' : 'Sem sincronia';
+        side.sync.title = sOn
+          ? 'Letra sincronizada — tocar para ver o texto completo'
+          : 'Texto completo — tocar para sincronizar com a música';
       }
-      if (side.credit) side.credit.classList.toggle('hidden', !hasLyrics);
+      // Traduzir e compartilhar: aparecem sempre que há letra
+      if (side.translate) {
+        side.translate.classList.toggle('hidden', !hasLyrics);
+        side.translate.classList.remove('on');
+        side.translate.setAttribute('aria-pressed', 'false');
+      }
+      if (side.share) side.share.classList.toggle('hidden', !hasLyrics);
+      // Expandir (só desktop; o botão nem existe no mobile)
+      if (side.expand) side.expand.classList.toggle('hidden', !hasLyrics);
     });
     lineEls.exp = side2Lines(els.exp);
     lineEls.mp = side2Lines(els.mp);
+    syncOverlay();
   }
 
   function side2Lines(side) {
-    return side.box ? Array.from(side.box.querySelectorAll('.lyrics-line')) : [];
+    return side.scroll ? Array.from(side.scroll.querySelectorAll('.lyrics-line')) : [];
   }
 
   // ---------------------------------------------------------------
@@ -545,6 +669,14 @@ const Lyrics = (function () {
         arr[i].classList.toggle('past', i < idx);
       }
     });
+    // Espelha o destaque no overlay, quando aberto
+    if (overlayOpen() && overlayLines.length) {
+      for (let i = 0; i < overlayLines.length; i++) {
+        overlayLines[i].classList.toggle('active', i === idx);
+        overlayLines[i].classList.toggle('past', i < idx);
+      }
+      overlayActiveIdx = idx;
+    }
     ensureFollow();
   }
 
@@ -586,14 +718,18 @@ const Lyrics = (function () {
 
     const vk = visibleSide();
     if (!vk) return;
-    const box = els[vk].box;
+    const box = els[vk].scroll;
     const line = lineEls[vk][activeIdx];
     if (!box || !line) return;
     if (Date.now() < userScrollUntil) return; // usuário está lendo/rolando
 
+    // Centraliza a linha ativa na área VISÍVEL (abaixo do cabeçalho fixo),
+    // para que ela não fique escondida sob o header ao acompanhar.
+    const headH = headerHeight(vk);
+    const viewH = box.clientHeight - headH;
     const maxScroll = Math.max(0, box.scrollHeight - box.clientHeight);
     const target = Math.max(0, Math.min(
-      line.offsetTop - box.clientHeight / 2 + line.clientHeight / 2,
+      line.offsetTop - headH - viewH / 2 + line.clientHeight / 2,
       maxScroll));
     const diff = target - box.scrollTop;
     if (Math.abs(diff) < 0.5) return;
@@ -607,6 +743,26 @@ const Lyrics = (function () {
     if (step > maxStep) step = maxStep;
     else if (step < -maxStep) step = -maxStep;
     box.scrollTop += step;
+
+    // Overlay aberto: acompanha a mesma linha ativa (centralizada)
+    if (overlayOpen() && overlayScroll && overlayActiveIdx >= 0) {
+      const oline = overlayLines[overlayActiveIdx];
+      if (oline) {
+        const oMax = Math.max(0, overlayScroll.scrollHeight - overlayScroll.clientHeight);
+        const oTarget = Math.max(0, Math.min(
+          oline.offsetTop - overlayScroll.clientHeight / 2 + oline.clientHeight / 2, oMax));
+        const oDiff = oTarget - overlayScroll.scrollTop;
+        if (Math.abs(oDiff) >= 0.5) {
+          if (reducedMotion.matches) overlayScroll.scrollTop = oTarget;
+          else {
+            let os = oDiff * (1 - Math.exp(-dt / FOLLOW_TAU));
+            const om = FOLLOW_MAX_V * dt;
+            if (os > om) os = om; else if (os < -om) os = -om;
+            overlayScroll.scrollTop += os;
+          }
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------
@@ -651,8 +807,124 @@ const Lyrics = (function () {
   // Interações: alternador de sincronia, rolagem manual e
   // clique-para-buscar (linhas sincronizadas)
   // ---------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // Interações: botões do cabeçalho (sincronia, traduzir, compartilhar,
+  // expandir), rolagem manual e clique-para-buscar
+  // ---------------------------------------------------------------
   function markUserScroll() {
     userScrollUntil = Date.now() + 4000;
+  }
+
+  // Texto simples da letra atual (para compartilhar / traduzir)
+  function currentPlainText() {
+    if (!cur) return '';
+    if (cur.plain) return cur.plain;
+    if (cur.lines) return linesToPlain(cur.lines);
+    return '';
+  }
+
+  // Compartilhar a letra + link da faixa (usa a Web Share API; cai para
+  // copiar ao clipboard quando indisponível)
+  function shareLyrics() {
+    const st = appState();
+    const t = st && st.currentTrack;
+    if (!t) return;
+    const title = (t.title || 'MinStream');
+    const url = t.videoId ? ('https://youtu.be/' + t.videoId) : '';
+    const body = currentPlainText();
+    const text = body ? (title + '\n\n' + body) : title;
+    try {
+      if (navigator.share) {
+        navigator.share({ title: title, text: text, url: url || undefined }).catch(() => {});
+        return;
+      }
+    } catch (_) {}
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text + (url ? ('\n' + url) : ''));
+        if (typeof showToast === 'function') showToast('Letra copiada para a área de transferência');
+        return;
+      }
+    } catch (_) {}
+    if (typeof showToast === 'function') showToast('Não foi possível compartilhar agora');
+  }
+
+  // Traduzir a letra para o idioma do app/navegador. Alterna entre
+  // original e tradução. Usa o endpoint público do Google Translate a
+  // partir do navegador do usuário; se falhar, avisa e mantém o original.
+  function uiLang() {
+    try {
+      const l = (navigator.language || 'pt').slice(0, 2).toLowerCase();
+      return l || 'pt';
+    } catch (_) { return 'pt'; }
+  }
+
+  async function translateText(text, target) {
+    const key = target + '::' + text;
+    if (translateCache.has(key)) return translateCache.get(key);
+    const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='
+      + encodeURIComponent(target) + '&dt=t&q=' + encodeURIComponent(text);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('http ' + res.status);
+    const data = await res.json();
+    // data[0] é uma lista de segmentos [traduzido, original, ...]
+    const out = (data && data[0] || []).map(seg => (seg && seg[0]) || '').join('');
+    const clean = out.trim();
+    if (!clean) throw new Error('vazio');
+    translateCache.set(key, clean);
+    return clean;
+  }
+
+  function setTranslateBusy(busy) {
+    eachSide(side => {
+      if (side.translate) side.translate.classList.toggle('busy', busy);
+    });
+  }
+  function setTranslateOn(on) {
+    eachSide(side => {
+      if (!side.translate) return;
+      side.translate.classList.toggle('on', on);
+      side.translate.setAttribute('aria-pressed', String(on));
+    });
+  }
+
+  function showPlain(text) {
+    // Renderiza um texto estático (usado para exibir a tradução)
+    eachSide(side => {
+      if (!side.scroll) return;
+      const d = document.createElement('div');
+      d.className = 'lyrics-plain';
+      d.textContent = text;
+      side.scroll.replaceChildren(d);
+      side.scroll.scrollTop = 0;
+    });
+    lineEls.exp = [];
+    lineEls.mp = [];
+    syncOverlay();
+  }
+
+  async function toggleTranslate() {
+    if (translated) {
+      // Volta ao original
+      translated = false;
+      setTranslateOn(false);
+      renderCurrent();
+      return;
+    }
+    const text = currentPlainText();
+    if (!text) return;
+    setTranslateBusy(true);
+    try {
+      const tr = await translateText(text, uiLang());
+      translated = true;
+      setTranslateBusy(false);
+      setTranslateOn(true);
+      showPlain(tr);
+      if (typeof showToast === 'function') showToast('Letra traduzida');
+    } catch (_) {
+      setTranslateBusy(false);
+      if (typeof showToast === 'function') showToast('Não foi possível traduzir a letra agora');
+    }
   }
 
   eachSide(side => {
@@ -670,24 +942,26 @@ const Lyrics = (function () {
         } catch (_) {}
       });
     }
+    if (side.translate) side.translate.addEventListener('click', toggleTranslate);
+    if (side.share) side.share.addEventListener('click', shareLyrics);
+    if (side.expand) side.expand.addEventListener('click', openOverlay);
 
-    if (!side.box) return;
+    if (!side.scroll) return;
 
     // Intenção de rolagem do usuário: wheel (mouse) e toque (mobile).
     // O evento 'scroll' sozinho não serve aqui, pois o seguidor também
     // escreve scrollTop; a janela progScrollUntil filtra essas escritas.
-    side.box.addEventListener('wheel', markUserScroll, { passive: true });
-    side.box.addEventListener('touchstart', markUserScroll, { passive: true });
-    side.box.addEventListener('touchmove', markUserScroll, { passive: true });
-    side.box.addEventListener('mousedown', e => {
-      // Arraste da barra de rolagem (área além do clientWidth)
-      if (e.offsetX >= side.box.clientWidth) markUserScroll();
+    side.scroll.addEventListener('wheel', markUserScroll, { passive: true });
+    side.scroll.addEventListener('touchstart', markUserScroll, { passive: true });
+    side.scroll.addEventListener('touchmove', markUserScroll, { passive: true });
+    side.scroll.addEventListener('mousedown', e => {
+      if (e.offsetX >= side.scroll.clientWidth) markUserScroll();
     });
-    side.box.addEventListener('scroll', () => {
+    side.scroll.addEventListener('scroll', () => {
       if (Date.now() > progScrollUntil) markUserScroll();
     }, { passive: true });
 
-    side.box.addEventListener('click', e => {
+    side.scroll.addEventListener('click', e => {
       const line = e.target && e.target.closest ? e.target.closest('.lyrics-line') : null;
       if (!line || !line.dataset.t) return;
       const t = parseFloat(line.dataset.t);

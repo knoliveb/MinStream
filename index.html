@@ -119,17 +119,25 @@
 
     <!-- Letra da faixa (sincronizada quando disponível, via LRCLIB) -->
     <div class="mp-lyrics" id="mp-lyrics">
-      <h3>Letra</h3>
-      <div class="lyrics-box-wrap">
-        <button class="lyrics-sync-toggle hidden" id="mp-lyrics-sync" aria-pressed="true" title="Alternar entre letra sincronizada e letra completa (sem sincronização)">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" stroke-linecap="round"/></svg>
-          <span>Sincronizada</span>
-        </button>
-        <div class="lyrics-box" id="mp-lyrics-box">
+      <div class="lyrics-box" id="mp-lyrics-box">
+        <div class="lyrics-header">
+          <span class="lyrics-label">Letra</span>
+          <div class="lyrics-actions">
+            <button class="lyrics-act lyrics-translate hidden" id="mp-lyrics-translate" aria-pressed="false" title="Traduzir a letra">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M8 3v2c0 4.5-2 7-5 8"/><path d="M5 9c0 2.4 2.6 4.5 6 5"/><path d="M13 21l4-9 4 9"/><path d="M14.5 17h5"/></svg>
+            </button>
+            <button class="lyrics-act lyrics-share hidden" id="mp-lyrics-share" title="Compartilhar a música">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+            </button>
+            <button class="lyrics-act lyrics-sync-toggle hidden" id="mp-lyrics-sync" aria-pressed="true" title="Alternar entre letra sincronizada e letra completa (sem sincronização)">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="lyrics-scroll" id="mp-lyrics-scroll">
           <div class="lyrics-status">Sem letra disponível</div>
         </div>
       </div>
-      <div class="lyrics-credit hidden" id="mp-lyrics-credit">Letras fornecidas por LRCLIB</div>
     </div>
 
     <!-- Relacionados (aparece ao rolar) -->
@@ -165,6 +173,7 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>
       </button>
     </div>
+    <div class="exp-modern-top">
     <div class="exp-stage" id="exp-stage">
       <!-- Modo video: o container #video-cover e posicionado sobre este palco -->
       <div class="exp-cover-view">
@@ -191,17 +200,29 @@
     </div>
     <!-- Letra da faixa (sincronizada quando disponível, via LRCLIB) -->
     <div class="exp-lyrics" id="exp-lyrics">
-      <h3>Letra</h3>
-      <div class="lyrics-box-wrap">
-        <button class="lyrics-sync-toggle hidden" id="exp-lyrics-sync" aria-pressed="true" title="Alternar entre letra sincronizada e letra completa (sem sincronização)">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" stroke-linecap="round"/></svg>
-          <span>Sincronizada</span>
-        </button>
-        <div class="lyrics-box" id="exp-lyrics-box">
+      <div class="lyrics-box" id="exp-lyrics-box">
+        <div class="lyrics-header">
+          <span class="lyrics-label">Letra</span>
+          <div class="lyrics-actions">
+            <button class="lyrics-act lyrics-translate hidden" id="exp-lyrics-translate" aria-pressed="false" title="Traduzir a letra">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M8 3v2c0 4.5-2 7-5 8"/><path d="M5 9c0 2.4 2.6 4.5 6 5"/><path d="M13 21l4-9 4 9"/><path d="M14.5 17h5"/></svg>
+            </button>
+            <button class="lyrics-act lyrics-share hidden" id="exp-lyrics-share" title="Compartilhar a música">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+            </button>
+            <button class="lyrics-act lyrics-sync-toggle hidden" id="exp-lyrics-sync" aria-pressed="true" title="Alternar entre letra sincronizada e letra completa (sem sincronização)">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" stroke-linecap="round"/></svg>
+            </button>
+            <button class="lyrics-act lyrics-expand hidden" id="exp-lyrics-expand" title="Expandir a letra em tela cheia">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="lyrics-scroll" id="exp-lyrics-scroll">
           <div class="lyrics-status">Sem letra disponível</div>
         </div>
       </div>
-      <div class="lyrics-credit hidden" id="exp-lyrics-credit">Letras fornecidas por LRCLIB</div>
+    </div>
     </div>
     <div class="exp-related" id="exp-related">
       <h3>Videoclipes relacionados</h3>
