@@ -3047,9 +3047,13 @@ body.theater-open:not(.mobile-theater) #exp-backdrop {
 
    APARÊNCIA FIXA: as duas colunas valem para TODA a faixa desktop
    (≥769px), sem empilhamento em telas médias. O container de letra é
-   SEMPRE renderizado ao lado do palco, com a mesma altura — com letra
-   sincronizada, com letra estática ou sem letra nenhuma (mostra
-   "Sem letra disponível" / "Buscando letra…" e segue idêntico).
+   renderizado ao lado do palco, com a mesma altura, SEMPRE QUE HOUVER
+   letra — sincronizada ou estática. Sem letra para a faixa, ou enquanto
+   a busca ainda corre em segundo plano, ele nem entra na tela: o palco
+   fica sozinho e centralizado, e o painel aparece (com um fade curto)
+   só quando o texto chega. Avisos como "Buscando letra…" e "Sem letra
+   disponível" ficam para o layout clássico e para o mobile, onde a
+   letra não disputa largura com o vídeo.
 
    ALTURA UNIFICADA: no moderno, o palco e a letra têm EXATAMENTE a
    altura que o palco tem no layout clássico — min(52vh, 560px) — e o
@@ -3060,6 +3064,13 @@ body.theater-open:not(.mobile-theater) #exp-backdrop {
    palco/vídeo para fora da tela). O termo 30vw protege telas
    estreitas/retrato: limita a altura para o palco 16:9 caber ao lado
    da coluna da letra, deixando a coluna da letra confortável. */
+@keyframes lyrics-reveal {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #expanded-player.layout-modern .exp-lyrics { animation: none; }
+}
 @media (min-width: 769px) {
   #expanded-player.layout-modern {
     display: none;
@@ -3115,10 +3126,23 @@ body.theater-open:not(.mobile-theater) #exp-backdrop {
     display: flex;
     flex-direction: column;
   }
-  /* ...mas quando a faixa NÃO tem letra, o container some (esta regra
-     precisa de especificidade maior que o display:flex acima). */
-  #expanded-player.layout-modern .exp-lyrics.lyrics-none {
+  /* Os três casos em que o container não entra na tela. Todos precisam de
+     especificidade maior que o display:flex acima — inclusive o .hidden
+     da preferência do usuário, que sozinho (0,2,0) perdia para o seletor
+     com ID (1,2,0) e deixava a letra visível no moderno mesmo desligada.
+       .hidden         -> Perfil > Configurações: letra desligada
+       .lyrics-none    -> a faixa não tem letra (ou é instrumental)
+       .lyrics-pending -> a busca ainda corre em segundo plano */
+  #expanded-player.layout-modern .exp-lyrics.hidden,
+  #expanded-player.layout-modern .exp-lyrics.lyrics-none,
+  #expanded-player.layout-modern .exp-lyrics.lyrics-pending {
     display: none;
+  }
+  /* Entrada suave quando a letra finalmente chega: o container sai de
+     display:none, o que reinicia a animação sozinho — sem precisar de
+     classe extra nem de temporizador no JS. */
+  #expanded-player.layout-modern .exp-lyrics {
+    animation: lyrics-reveal 0.26s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
   }
   #expanded-player.layout-modern .exp-lyrics .lyrics-box {
     height: 100%;
@@ -3132,18 +3156,21 @@ body.theater-open:not(.mobile-theater) #exp-backdrop {
     flex: 1 1 auto;
     min-height: 0;
   }
-  /* Letra oculta (Perfil > Configurações) ou INEXISTENTE para a faixa
-     (.lyrics-none, aplicada pelo lyrics.js): o palco fica centralizado
-     em coluna única, sem sobrar espaço vazio ao lado. Aqui a altura é
-     explícita (não-percentual): com justify/align center o tamanho vira
+  /* Letra oculta (Perfil > Configurações), INEXISTENTE para a faixa
+     (.lyrics-none) ou ainda em busca (.lyrics-pending, ambas aplicadas
+     pelo lyrics.js): o palco fica centralizado em coluna única, sem
+     sobrar espaço vazio ao lado. Aqui a altura é explícita
+     (não-percentual): com justify/align center o tamanho vira
      fit-content e, sem conteúdo em fluxo, a caixa colapsaria para 0. */
   #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.hidden),
-  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-none) {
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-none),
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-pending) {
     grid-template-columns: minmax(0, 1fr);
     justify-items: center;
   }
   #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.hidden) .exp-stage,
-  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-none) .exp-stage {
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-none) .exp-stage,
+  #expanded-player.layout-modern .exp-modern-top:has(> .exp-lyrics.lyrics-pending) .exp-stage {
     height: var(--modern-h);
     width: auto;
     justify-self: center;
@@ -4405,7 +4432,47 @@ body.tv-mode #tv-exit { display: flex; }
   color: var(--bg);
   border-color: var(--green);
 }
+.artist-tab[hidden] { display: none; }
 .artist-page.loading .artist-tabs { opacity: 0.45; pointer-events: none; }
+
+/* Cartoes de playlist do canal (aba "Playlists" do perfil) */
+.artist-playlist-grid { margin-top: 4px; }
+.playlist-card .album-cover-wrap { aspect-ratio: 16 / 9; }
+.playlist-card-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.78);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+}
+.playlist-card-save {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.72);
+  color: var(--text);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.22s ease, color 0.22s ease;
+}
+.playlist-card:hover .playlist-card-save { display: flex; }
+.playlist-card-save:hover { background: var(--green); color: var(--bg); }
+@media (max-width: 900px) {
+  /* Sem hover no toque: o botao de salvar fica sempre visivel */
+  .playlist-card-save { display: flex; }
+}
 @media (max-width: 600px) {
   .artist-tabs {
     flex-wrap: nowrap;

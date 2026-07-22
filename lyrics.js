@@ -696,7 +696,18 @@ const Lyrics = (function () {
     // container reaparece sozinho. A preferencia do usuario
     // (Perfil > Configuracoes) continua mandando via .hidden.
     const noLyrics = !!entry && (entry.status === 'none' || entry.status === 'instrumental');
-    if (els.exp.root) els.exp.root.classList.toggle('lyrics-none', noLyrics);
+
+    // LAYOUT MODERNO: enquanto a busca ainda nao resolveu, o container
+    // tambem fica fora da tela. A letra e carregada em segundo plano e o
+    // painel so entra quando ha texto de verdade — nada de "Buscando
+    // letra…" ocupando metade da largura ao lado do palco. No classico o
+    // aviso continua aparecendo (ali a letra fica ABAIXO do palco e nao
+    // rouba espaco de nada), e o mobile segue igual.
+    const pending = !hasLyrics && !noLyrics;
+    if (els.exp.root) {
+      els.exp.root.classList.toggle('lyrics-none', noLyrics);
+      els.exp.root.classList.toggle('lyrics-pending', pending);
+    }
 
     eachSide(side => {
       if (!side.scroll) return;

@@ -2357,6 +2357,87 @@ function channelIdFromUrl(u) {
   return m ? m[1] : '';
 }
 
+const UCID_RE = /^UC[A-Za-z0-9_-]{10,}$/;
+
+// Reconhece uma URL de CANAL do YouTube nas quatro formas que existem:
+//   /channel/UC...   -> ja e o ID
+//   /@handle         -> handle moderno (inclusive /@handle/playlists)
+//   /c/nome          -> URL personalizada antiga
+//   /user/nome       -> usuario legado
+// Devolve { kind, value, name } ou null. O sufixo da aba (/playlists,
+// /videos, /streams...) e ignorado: o que importa e o canal.
+function extractChannelRef(raw) {
+  if (!raw) return null;
+  let u;
+  try { u = new URL(raw, 'https://www.youtube.com'); } catch (_) { return null; }
+  const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
+  if (!/^(youtube\.com|youtube-nocookie\.com)$/.test(host)) return null;
+  const parts = u.pathname.split('/').filter(Boolean);
+  if (!parts.length) return null;
+  const a = parts[0], b = parts[1] || '';
+  if (a === 'channel' && UCID_RE.test(b)) return { kind: 'id', value: b, name: '' };
+  if (a === 'c' && b) return { kind: 'name', value: b, name: safeDecode(b) };
+  if (a === 'user' && b) return { kind: 'user', value: b, name: safeDecode(b) };
+  if (a.charAt(0) === '@' && a.length > 1) return { kind: 'handle', value: a, name: safeDecode(a.slice(1)) };
+  return null;
+}
+
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch (_) { return s; }
+}
+
+// Resolve qualquer referencia de canal para o ID UC... Sem isso, um
+// link /@handle nao serve para nada: todos os endpoints de canal das
+// instancias publicas trabalham com o UCID.
+const channelIdRefCache = new Map(); // 'kind:value' -> UCID | ''
+
+async function resolveChannelId(ref) {
+  if (!ref) return '';
+  if (ref.kind === 'id') return ref.value;
+  const key = ref.kind + ':' + ref.value;
+  if (channelIdRefCache.has(key)) return channelIdRefCache.get(key);
+
+  const ytUrl = ref.kind === 'handle'
+    ? 'https://www.youtube.com/' + ref.value
+    : ref.kind === 'user'
+      ? 'https://www.youtube.com/user/' + ref.value
+      : 'https://www.youtube.com/c/' + ref.value;
+
+  for (const src of YT_SEARCH_SOURCES) {
+    try {
+      let id = '';
+      if (src.kind === 'invidious') {
+        // /api/v1/resolveurl converte handle/URL personalizada em UCID
+        const res = await fetchWithTimeout(
+          src.base + '/api/v1/resolveurl?url=' + encodeURIComponent(ytUrl), 4500);
+        if (!res.ok) continue;
+        const data = await res.json();
+        id = (data && (data.ucid || data.browseId)) || '';
+      } else {
+        // Piped resolve pelos apelidos /c/{nome} e /user/{nome}
+        const path = ref.kind === 'user'
+          ? '/user/' + encodeURIComponent(ref.value)
+          : '/c/' + encodeURIComponent(ref.value);
+        const res = await fetchWithTimeout(src.base + path, 4500);
+        if (!res.ok) continue;
+        const data = await res.json();
+        id = (data && data.id) || '';
+      }
+      if (UCID_RE.test(id)) { channelIdRefCache.set(key, id); return id; }
+    } catch (_) { /* tenta a proxima instancia */ }
+  }
+
+  // Ultimo recurso: o handle costuma ser o proprio nome do canal
+  try {
+    const found = await searchYouTubeChannels(ref.name || ref.value);
+    if (found.length && UCID_RE.test(found[0].channelId)) {
+      channelIdRefCache.set(key, found[0].channelId);
+      return found[0].channelId;
+    }
+  } catch (_) {}
+  return '';
+}
+
 function normalizePiped(items) {
   return (items || [])
     .filter(it => it && it.url && it.url.includes('watch?v='))
@@ -2909,6 +2990,115 @@ async function searchYouTubePlaylists(query) {
 }
 
 // ============================================
+// PLAYLISTS DE UM CANAL (a aba "playlists" do YouTube)
+// Piped nao tem endpoint proprio: o /channel/{id} devolve um array
+// `tabs`, e cada aba e buscada em /channels/tabs?data=... O Invidious
+// tem o endpoint direto /api/v1/channels/{ucid}/playlists.
+// Normaliza tudo para a mesma forma de searchYouTubePlaylists.
+// ============================================
+const channelPlaylistsCache = new Map(); // UCID -> playlists[]
+
+// Mais tolerante que normalizePipedPlaylists: os itens vindos de uma aba
+// de canal nem sempre trazem o campo "type" — basta a URL ser de lista.
+function normalizePipedTabPlaylists(items) {
+  return (items || [])
+    .filter(it => it && it.url && it.url.includes('list=') && (!it.type || it.type === 'playlist'))
+    .map(it => ({
+      playlistId: extractPlaylistId(it.url),
+      title: it.name || it.title || '',
+      author: it.uploaderName || '',
+      videos: (typeof it.videos === 'number' && it.videos > 0) ? it.videos : 0,
+      thumbnail: it.thumbnail || '',
+    }))
+    .filter(it => isValidPlaylistId(it.playlistId));
+}
+
+function normalizeInvidiousChannelPlaylists(items) {
+  return (items || [])
+    .filter(it => it && it.playlistId && (!it.type || it.type === 'playlist'))
+    .map(it => {
+      const v0 = Array.isArray(it.videos) ? it.videos[0] : null;
+      return {
+        playlistId: it.playlistId,
+        title: it.title || '',
+        author: it.author || '',
+        videos: (typeof it.videoCount === 'number' && it.videoCount > 0) ? it.videoCount : 0,
+        thumbnail: it.playlistThumbnail ||
+          (v0 && v0.videoId ? 'https://i.ytimg.com/vi/' + v0.videoId + '/mqdefault.jpg' : ''),
+      };
+    })
+    .filter(it => isValidPlaylistId(it.playlistId));
+}
+
+function dedupePlaylists(list) {
+  const seen = new Set();
+  return (list || []).filter(pl => {
+    if (!pl || seen.has(pl.playlistId)) return false;
+    seen.add(pl.playlistId);
+    return true;
+  });
+}
+
+async function fetchPipedTabPlaylists(base, tabData) {
+  try {
+    const res = await fetchWithTimeout(
+      base + '/channels/tabs?data=' + encodeURIComponent(tabData), 5000);
+    if (!res.ok) return [];
+    const d = await res.json();
+    return normalizePipedTabPlaylists(d && (d.content || d.items || d.relatedStreams));
+  } catch (_) { return []; }
+}
+
+// Aba de playlists dentro da resposta de canal do Piped
+function pipedPlaylistTabOf(data) {
+  const tab = ((data && data.tabs) || []).find(t => t && /playlist/i.test(t.name || ''));
+  return (tab && tab.data) || '';
+}
+
+async function fetchChannelPlaylists(profile) {
+  const id = profile && profile.channelId;
+  if (!id || !UCID_RE.test(id)) return [];
+  if (channelPlaylistsCache.has(id)) return channelPlaylistsCache.get(id);
+
+  let out = [];
+
+  // Atalho: a aba ja veio junto com o conteudo do canal (uma requisicao a menos)
+  if (profile.pipedPlaylistTab && profile.pipedBase) {
+    out = await fetchPipedTabPlaylists(profile.pipedBase, profile.pipedPlaylistTab);
+  }
+
+  if (!out.length) {
+    for (const src of YT_SEARCH_SOURCES) {
+      try {
+        if (src.kind === 'piped') {
+          const res = await fetchWithTimeout(src.base + '/channel/' + id, 5000);
+          if (!res.ok) continue;
+          const data = await res.json();
+          const tabData = pipedPlaylistTabOf(data);
+          if (!tabData) continue;
+          const got = await fetchPipedTabPlaylists(src.base, tabData);
+          if (got.length) { out = got; break; }
+        } else {
+          const res = await fetchWithTimeout(
+            src.base + '/api/v1/channels/' + id + '/playlists', 5000);
+          if (!res.ok) continue;
+          const data = await res.json();
+          const got = normalizeInvidiousChannelPlaylists(
+            (data && data.playlists) || (Array.isArray(data) ? data : []));
+          if (got.length) { out = got; break; }
+        }
+      } catch (_) { /* tenta a proxima instancia */ }
+    }
+  }
+
+  const clean = dedupePlaylists(AdShield.filter(out));
+  // Nao grava lista vazia: as instancias publicas oscilam e uma proxima
+  // visita pode funcionar (mesma politica da busca de canais)
+  if (clean.length) channelPlaylistsCache.set(id, clean);
+  return clean;
+}
+
+// ============================================
 // SHORTS DO YOUTUBE (videos curtos verticais)
 // Busca shorts usando as mesmas instancias Piped/Invidious.
 // Filtra por duracao curta (<= 90s) e palavras-chave tipicas de shorts.
@@ -3034,6 +3224,11 @@ let artistActiveTab = 'all';
 // Lista atualmente exibida (ja ordenada pela aba ativa) — usada tambem
 // pelo "Tocar tudo" para tocar na mesma ordem que o usuario ve.
 let artistDisplayedVideos = [];
+// Playlists do canal aberto. Carregadas em segundo plano DEPOIS que a
+// pagina ja apareceu: a aba so surge quando ha o que mostrar.
+let artistPlaylists = [];
+let artistPlaylistsFromSearch = false; // veio da busca, nao do canal
+let artistPlaylistsToken = 0;          // descarta carregamentos obsoletos
 
 function fmtCompact(n) {
   if (!n || n <= 0) return '';
@@ -3097,8 +3292,12 @@ async function searchYouTubeChannels(query) {
   return [];
 }
 
-// Busca os videos (e metadados extras) do canal
-async function fetchChannelContent(channel) {
+// Busca os videos (e metadados extras) do canal.
+// opts.allowEmptyVideos: aceita o canal mesmo sem videos — usado quando
+// o canal foi aberto por ID/URL, caso em que ele ainda pode valer a pena
+// pelas playlists (um canal so de playlists deixaria de existir aqui).
+async function fetchChannelContent(channel, opts) {
+  const allowEmpty = !!(opts && opts.allowEmptyVideos);
   for (const src of YT_SEARCH_SOURCES) {
     try {
       if (src.kind === 'piped') {
@@ -3106,7 +3305,7 @@ async function fetchChannelContent(channel) {
         if (!res.ok) continue;
         const data = await res.json();
         const vids = AdShield.filter(normalizePiped(data.relatedStreams || []));
-        if (!vids.length) continue;
+        if (!vids.length && !(allowEmpty && data.name)) continue;
         return {
           ...channel,
           name: data.name || channel.name,
@@ -3115,6 +3314,9 @@ async function fetchChannelContent(channel) {
           subs: (typeof data.subscriberCount === 'number' && data.subscriberCount > 0) ? data.subscriberCount : channel.subs,
           description: data.description || channel.description,
           videos: rankByPlays(vids).slice(0, 30), // acuracia: mais reproduzidos primeiro
+          // Descritor da aba de playlists: evita uma segunda ida ao /channel
+          pipedBase: src.base,
+          pipedPlaylistTab: pipedPlaylistTabOf(data),
         };
       } else {
         const res = await fetchWithTimeout(src.base + '/api/v1/channels/' + channel.channelId + '/videos', 5000);
@@ -3123,7 +3325,7 @@ async function fetchChannelContent(channel) {
         const arr = (Array.isArray(data) ? data : (data && data.videos) || [])
           .map(it => ({ ...it, type: it.type || 'video' }));
         const vids = AdShield.filter(normalizeInvidious(arr));
-        if (!vids.length) continue;
+        if (!vids.length && !allowEmpty) continue;
         return { ...channel, banner: '', videos: rankByPlays(vids).slice(0, 30) };
       }
     } catch (_) { /* tenta a proxima instancia */ }
@@ -3250,6 +3452,7 @@ function ensureArtistPage() {
       <button class="artist-tab active" data-tab="all" role="tab" aria-selected="true">Tudo</button>
       <button class="artist-tab" data-tab="recent" role="tab" aria-selected="false">Recente</button>
       <button class="artist-tab" data-tab="views" role="tab" aria-selected="false">Mais tocado</button>
+      <button class="artist-tab" data-tab="playlists" data-ref="tabPlaylists" role="tab" aria-selected="false" hidden>Playlists</button>
     </div>
     <div data-ref="videos"></div>
   `;
@@ -3320,6 +3523,11 @@ function showArtistSkeleton(name) {
   // ainda pode estar em memoria; renderArtistView chama setArtistTab depois)
   artistActiveTab = 'all';
   artistDisplayedVideos = [];
+  // A aba de playlists some ate o novo canal responder
+  artistPlaylistsToken++;
+  artistPlaylists = [];
+  artistPlaylistsFromSearch = false;
+  if (artistRefs.tabPlaylists) artistRefs.tabPlaylists.hidden = true;
   if (artistRefs.tabs) {
     artistRefs.tabs.querySelectorAll('.artist-tab').forEach(b => {
       const on = b.dataset.tab === 'all';
@@ -3331,9 +3539,12 @@ function showArtistSkeleton(name) {
   artistRefs.videos.innerHTML = '<div class="track-skel"></div>'.repeat(6);
 }
 
-async function openArtistProfile(name) {
+// opts.channelId: abre direto por ID de canal (link colado), sem depender
+// da busca por nome — o caminho mais preciso quando ele existe.
+async function openArtistProfile(name, opts) {
   const q = (name || '').trim();
-  if (!q) return;
+  const forcedId = (opts && opts.channelId) || '';
+  if (!q && !forcedId) return;
   state.prevView = state.view;
   state.view = 'artist';
   document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
@@ -3341,10 +3552,19 @@ async function openArtistProfile(name) {
   });
 
   // Estrutura visivel imediatamente, com o nome preenchido
-  showArtistSkeleton(q);
+  showArtistSkeleton(q || 'Canal');
 
-  let profile = artistProfileCache.get(q.toLowerCase());
-  if (!profile) {
+  let profile = forcedId ? null : artistProfileCache.get(q.toLowerCase());
+  if (!profile && forcedId) {
+    // Canal conhecido: vai direto ao conteudo dele. Sem videos ainda serve,
+    // porque as playlists podem ser justamente o que o usuario quer.
+    profile = await fetchChannelContent(
+      { channelId: forcedId, name: q, avatar: '', subs: 0, description: '' },
+      { allowEmptyVideos: true }
+    );
+    if (profile && profile.name) artistProfileCache.set(profile.name.toLowerCase(), profile);
+  }
+  if (!profile && q) {
     profile = await fetchArtistProfile(q);
     // So fixa em cache o perfil completo do canal; o perfil de fallback
     // (montado da busca) fica fora para uma proxima visita tentar de novo
@@ -3352,14 +3572,22 @@ async function openArtistProfile(name) {
   }
   if (state.view !== 'artist') return; // usuario navegou enquanto carregava
 
-  if (!profile || !(profile.videos || []).length) {
+  // Canal sem videos: antes de desistir, verifica se ele tem playlists
+  if (profile && !(profile.videos || []).length) {
+    try { profile.playlists = await fetchChannelPlaylists(profile); } catch (_) {}
+    if (state.view !== 'artist') return;
+  }
+
+  if (!profile || (!(profile.videos || []).length && !(profile.playlists || []).length)) {
     artistPageEl.classList.remove('loading');
     artistRefs.meta.textContent = 'Canal indisponível no momento';
-    artistRefs.videos.innerHTML = '<div class="empty-state"><p>Não foi possível montar o perfil de "' + escapeHtml(q) + '" agora. Tente novamente mais tarde.</p></div>';
+    artistRefs.videos.innerHTML = '<div class="empty-state"><p>Não foi possível montar o perfil de "' + escapeHtml(q || 'canal') + '" agora. Tente novamente mais tarde.</p></div>';
     return;
   }
   currentArtistProfile = profile;
   renderArtistView();
+  // Playlists do canal em segundo plano: a pagina nao espera por elas
+  loadArtistPlaylists(profile);
 }
 
 // Preenche os campos da estrutura pre-existente com o perfil atual
@@ -3427,6 +3655,11 @@ function sortArtistVideos(videos, tab) {
 
 // Texto de apoio sob o titulo, conforme a aba ativa
 function artistTabNote(tab, fromSearch) {
+  if (tab === 'playlists') {
+    return artistPlaylistsFromSearch
+      ? 'O canal está temporariamente inacessível; exibindo playlists deste artista encontradas na busca.'
+      : 'Playlists públicas do canal, na mesma ordem da página do YouTube.';
+  }
   if (tab === 'recent') {
     return fromSearch
       ? 'Conteúdo do artista encontrado na busca, do mais recente para o mais antigo.'
@@ -3460,11 +3693,161 @@ function setArtistTab(tab) {
 function renderArtistVideos() {
   const p = currentArtistProfile;
   if (!p || !artistRefs.videos) return;
-  artistDisplayedVideos = sortArtistVideos(p.videos || [], artistActiveTab);
   if (artistRefs.listNote) {
     artistRefs.listNote.textContent = artistTabNote(artistActiveTab, p.fromSearch);
   }
+  // A aba de playlists tem lista propria (cartoes, nao faixas). O
+  // "Tocar tudo" continua valendo para a ultima ordem de videos vista.
+  if (artistActiveTab === 'playlists') {
+    renderArtistPlaylists();
+    return;
+  }
+  artistDisplayedVideos = sortArtistVideos(p.videos || [], artistActiveTab);
   renderYtSearchResults(artistRefs.videos, artistDisplayedVideos);
+}
+
+// ---- Playlists do canal ----------------------------------------------
+// Carrega em segundo plano e revela a aba so quando ha resultado. Ordem
+// de tentativa: aba de playlists do canal -> busca de playlists pelo nome
+// do artista (garante conteudo mesmo com os endpoints de canal fora).
+async function loadArtistPlaylists(profile) {
+  if (!profile) return;
+  const token = ++artistPlaylistsToken;
+
+  let list = (profile.playlists || []).slice();
+  let fromSearch = false;
+  if (!list.length) {
+    try { list = await fetchChannelPlaylists(profile); } catch (_) { list = []; }
+  }
+  if (!list.length && profile.name) {
+    try {
+      list = await searchYouTubePlaylists(profile.name);
+      fromSearch = list.length > 0;
+    } catch (_) { list = []; }
+  }
+  if (token !== artistPlaylistsToken || currentArtistProfile !== profile) return;
+
+  artistPlaylists = list;
+  artistPlaylistsFromSearch = fromSearch;
+  profile.playlists = list;
+  updateArtistPlaylistsTab();
+
+  if (artistActiveTab === 'playlists') renderArtistVideos();
+  // Canal sem videos: a aba de playlists e o unico conteudo, entra sozinha
+  else if (list.length && !(profile.videos || []).length) setArtistTab('playlists');
+}
+
+function updateArtistPlaylistsTab() {
+  const btn = artistRefs.tabPlaylists;
+  if (!btn) return;
+  if (!artistPlaylists.length) {
+    btn.hidden = true;
+    btn.textContent = 'Playlists';
+    if (artistActiveTab === 'playlists') setArtistTab('all');
+    return;
+  }
+  btn.hidden = false;
+  btn.textContent = 'Playlists \u00B7 ' + artistPlaylists.length;
+}
+
+const PLAYLIST_COVER_FALLBACK = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 fill=%22%23111%22/%3E%3Cpath d=%22M6.5 5.5v4.2a1.3 1.3 0 101 1.26V7h2V5.5z%22 fill=%22%230AE448%22/%3E%3C/svg%3E';
+
+function renderArtistPlaylists() {
+  const host = artistRefs.videos;
+  if (!host) return;
+  host.replaceChildren();
+  if (!artistPlaylists.length) {
+    host.innerHTML = '<div class="empty-state"><p>Nenhuma playlist pública encontrada neste canal.</p></div>';
+    return;
+  }
+  const grid = document.createElement('div');
+  grid.className = 'album-grid artist-playlist-grid';
+  artistPlaylists.forEach(pl => grid.appendChild(artistPlaylistCard(pl)));
+  host.appendChild(grid);
+}
+
+function artistPlaylistCard(pl) {
+  const card = document.createElement('div');
+  card.className = 'album-card playlist-card';
+  card.title = 'Tocar ' + (pl.title || 'playlist');
+
+  const coverWrap = document.createElement('div');
+  coverWrap.className = 'album-cover-wrap';
+
+  const img = document.createElement('img');
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.src = pl.thumbnail || PLAYLIST_COVER_FALLBACK;
+  // Miniaturas de proxy do Piped caem com frequencia: tenta os metadados
+  // oficiais uma vez antes de assumir a capa generica
+  let coverRetried = false;
+  img.addEventListener('error', () => {
+    if (coverRetried) { img.src = PLAYLIST_COVER_FALLBACK; return; }
+    coverRetried = true;
+    img.src = PLAYLIST_COVER_FALLBACK;
+    fetchPlaylistMeta(pl.playlistId).then(meta => {
+      if (meta && meta.cover) img.src = meta.cover;
+    }).catch(() => {});
+  });
+  coverWrap.appendChild(img);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'album-overlay';
+  overlay.innerHTML = '<button class="album-play-btn" tabindex="-1" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>';
+  coverWrap.appendChild(overlay);
+
+  if (pl.videos > 0) {
+    const badge = document.createElement('span');
+    badge.className = 'playlist-card-badge';
+    badge.textContent = pl.videos + (pl.videos === 1 ? ' vídeo' : ' vídeos');
+    coverWrap.appendChild(badge);
+  }
+
+  // Salvar em "Links Salvos" sem sair da pagina
+  const save = document.createElement('button');
+  save.className = 'playlist-card-save';
+  save.title = 'Salvar playlist';
+  save.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>';
+  save.addEventListener('click', (e) => {
+    e.stopPropagation();
+    Gallery.save({
+      id: null,
+      list: pl.playlistId,
+      title: pl.title || null,
+      cover: pl.thumbnail || null,
+    });
+  });
+  coverWrap.appendChild(save);
+
+  const info = document.createElement('div');
+  info.className = 'album-info';
+  const title = document.createElement('div');
+  title.className = 'album-title';
+  title.textContent = pl.title || 'Playlist';
+  const sub = document.createElement('div');
+  sub.className = 'album-artist';
+  sub.textContent = pl.author ? 'Playlist \u00B7 ' + pl.author : 'Playlist do YouTube';
+  info.appendChild(title);
+  info.appendChild(sub);
+
+  card.appendChild(coverWrap);
+  card.appendChild(info);
+  card.addEventListener('click', () => playArtistPlaylist(pl));
+  return card;
+}
+
+function playArtistPlaylist(pl) {
+  if (!pl || !isValidPlaylistId(pl.playlistId)) return;
+  // Semeia os metadados: o cabecalho do player ja nasce com o nome certo,
+  // sem esperar o oEmbed
+  if (!playlistMetaCache.has(pl.playlistId) && (pl.title || pl.thumbnail)) {
+    playlistMetaCache.set(pl.playlistId, {
+      title: pl.title || null,
+      cover: pl.thumbnail || null,
+    });
+  }
+  playFromUrl('https://www.youtube.com/playlist?list=' + pl.playlistId);
 }
 
 // ============================================
@@ -5420,6 +5803,14 @@ async function performSearch(raw) {
       const playlistId = extractPlaylistId(raw);
 
       if (!videoId && !playlistId) {
+        // URL de canal (/@handle, /c/, /user/, /channel/UC...) — inclusive
+        // com sufixo de aba, como /@canal/playlists: abre o perfil no app
+        const chRef = extractChannelRef(raw);
+        if (chRef) {
+          resultsEl.innerHTML = `<p class="yt-search-status">Abrindo o canal\u2026</p>`;
+          openChannelRef(chRef);
+          return;
+        }
         resultsEl.innerHTML = `<div class="empty-state"><p>URL do YouTube não reconhecida</p></div>`;
         return;
       }
@@ -5573,6 +5964,19 @@ async function performSearch(raw) {
       renderTilesSection(document.getElementById('tiles-container'), raw);
     }, 500);
   }
+}
+
+// Abre o perfil a partir de uma referencia de canal colada na busca.
+// Resolve handle/URL personalizada para o UCID; se nem isso funcionar,
+// cai na busca por nome (o handle quase sempre e o nome do canal).
+async function openChannelRef(ref) {
+  if (!ref) return;
+  const label = ref.name || 'Canal';
+  let id = '';
+  try { id = await resolveChannelId(ref); } catch (_) {}
+  if (id) { openArtistProfile(label, { channelId: id }); return; }
+  if (ref.name) { openArtistProfile(ref.name); return; }
+  showToast('Não consegui abrir esse canal agora.');
 }
 
 // Mostra um cartao "Artista — Ver perfil" acima dos resultados quando a
@@ -7442,6 +7846,7 @@ const PullToRefresh = (function () {
     try { ytShortsCache.clear(); } catch (_) {}
     try { ytChannelSearchCache.clear(); } catch (_) {}
     try { artistProfileCache.clear(); } catch (_) {}
+    try { channelPlaylistsCache.clear(); } catch (_) {}
     try { dynamicPlaylistCache.clear(); } catch (_) {}
   }
 

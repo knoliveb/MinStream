@@ -26,6 +26,17 @@ npx serve .
 
 Depois acesse `http://localhost:8080`.
 
+## Testes
+
+Scripts Node autocontidos que carregam o código real (sem rede: as instâncias públicas e o player são substituídos por dublês). O `test-lyrics-page.js` e o `test-artist-playlists-ui.js` precisam do `jsdom` (`npm i jsdom`).
+
+```bash
+node test-channel-playlists.js   # canal -> playlists: URL, resolução de handle, Piped/Invidious, cache
+node test-artist-playlists-ui.js # aba "Playlists" do perfil: cartões, tocar, salvar
+node test-lyrics-page.js         # tela cheia de letra (mobile)
+node test-lyrics-modern-visibility.js # quando o container de letra entra na tela (desktop)
+```
+
 ## Funcionalidades
 
 ### Reprodução
@@ -53,9 +64,15 @@ Depois acesse `http://localhost:8080`.
 - A página de perfil reúne o conteúdo do canal do artista no YouTube: avatar, banner (quando disponível), inscritos, descrição, botão **Tocar tudo** e a lista de vídeos do canal, ranqueada do mais reproduzido para o menos (as APIs públicas retornam o lote mais recente do canal, ~30 vídeos).
 - **Estrutura pré-existente**: a página é criada uma única vez (template persistente com referências diretas aos campos) e reaproveitada em todas as visitas — abrir um artista apenas preenche os campos. Ela aparece instantaneamente com o nome já preenchido e um skeleton (avatar e linhas com shimmer) enquanto os dados chegam; os dois fetches de resolução (vídeos e canais) correm em paralelo e a busca do conteúdo do canal tem prazo total de 8s antes de cair no fallback.
 - **Resiliência**: a montagem tenta três caminhos — busca de canais → conteúdo do canal; ID do canal extraído dos próprios resultados de vídeo (`uploaderUrl`/`authorId`); e, se os endpoints de canal estiverem fora, um fallback garantido monta o perfil com os vídeos do artista vindos da busca comum (com aviso na página). Falhas não ficam em cache, então uma nova visita tenta o canal completo de novo.
+- **Aba Playlists**: além de Tudo / Recente / Mais tocado, o perfil traz as **playlists públicas do canal** — as mesmas da aba `/playlists` da página do YouTube —, em cartões com capa, contagem de vídeos e botão de salvar. Tocar um cartão carrega a playlist inteira no player nativo do YouTube (fila gerida pelo próprio player). A aba **só aparece quando há playlists** e mostra a quantidade; o carregamento acontece em segundo plano, depois que a página já apareceu, então não atrasa a abertura do perfil.
+  - **Como são obtidas**: o Piped não tem endpoint dedicado — o `/channel/{id}` devolve um array `tabs` e a aba é buscada em `/channels/tabs?data=…` (o descritor já vem junto com o conteúdo do canal, então não há requisição extra); o Invidious usa o endpoint direto `/api/v1/channels/{ucid}/playlists`. Passam pelo AdShield e são deduplicadas por ID. Cache em memória por canal, e listas vazias **não** ficam em cache (as instâncias públicas oscilam).
+  - **Fallback**: com os endpoints de canal fora do ar, a aba é preenchida com playlists do artista encontradas na busca comum (`searchYouTubePlaylists`), com aviso na página.
+  - Um canal **sem vídeos** mas com playlists deixou de ser "canal indisponível": o perfil abre já na aba Playlists.
+- A ordem das playlists é a do próprio canal (igual à página do YouTube). O ranqueamento por reproduções continua valendo só para vídeos — as APIs públicas não expõem views de playlist.
 
 ### Busca
 - Busca por texto (Piped/Invidious, com fallback entre instâncias) e por URL do YouTube (vídeo ou playlist), com pré-visualização e botão **Salvar**.
+- **URL de canal**: colar `youtube.com/@handle`, `/c/nome`, `/user/nome` ou `/channel/UC…` abre o **perfil do artista dentro do app** (o sufixo de aba é ignorado — `youtube.com/@Canal/playlists` cai direto no perfil, com a aba Playlists). O handle é convertido em ID de canal via `/api/v1/resolveurl` do Invidious ou `/c/{nome}` do Piped, com a busca de canais pelo nome como último recurso.
 - Histórico de pesquisas recentes.
 - Seção **Explorar seus Gostos**: carrossel horizontal de cards de gênero (degradê cinza-escuro → verde) que disparam a busca.
 - Seção **Tendências**: carrossel de cards (capa 16:9, play no hover, título e "artista · reproduções", artista clicável para o perfil). O conteúdo vem em duas camadas: **pessoal** (primária) — o mais visto no YouTube dentro dos seus gostos, combinando buscas derivadas dos gêneros (Tastes) e dos artistas mais tocados (PlayStats), deduplicadas por vídeo e ordenadas por views, com teto de 12 buscas em lotes de 3; e **geral** (fallback) — o trending de música das últimas 24 horas, quando você ainda não tem gostos ou as buscas pessoais não retornam nada. Cache de 30 min.
@@ -69,6 +86,7 @@ Depois acesse `http://localhost:8080`.
 - **Recentes**: histórico completo de reprodução — todas as reproduções guardadas (até 100), incluindo faixas do YouTube recriadas a partir dos metadados após um reload.
 - **Seguir artistas + seção "Seguindo"**: botão **Seguir** no perfil do artista (ao lado de "Tocar tudo"), que alterna para "Seguindo". Os seguidos aparecem no **topo do Início**, na seção **"Seguindo"**, como um **carrossel de círculos com a foto do perfil e o nome embaixo** — tocar abre o perfil. A foto é persistida ao seguir e atualizada em visitas futuras; sem foto, o círculo mostra a inicial. A seção fica oculta enquanto não há ninguém seguido. Chave `minstream_follows` (máx. 100, sem duplicados), incluída no Takeout com união por nome.
 - **Layout do player (desktop): Clássico e Moderno**: em Perfil → Configurações é possível escolher como o player expandido organiza as informações. No **Clássico** (padrão) o vídeo fica em cima e a letra logo abaixo; no **Moderno** o vídeo e a letra aparecem **lado a lado**, com os videoclipes relacionados em largura total abaixo — ali eles formam um **carrossel horizontal** (setas laterais que avançam uma página inteira e se apagam nas pontas, além de arrasto/trackpad), em vez de quebrar em grade. As duas formas compartilham os mesmos elementos e funções — muda só a disposição. Persistido em `minstream_exp_layout`.
+  - **No Moderno, a letra só aparece se existir**: a busca no LRCLIB corre em segundo plano com o container **fora da tela**, e ele entra (com um fade curto) apenas quando há texto — sincronizado ou estático. Enquanto busca, e também quando a faixa não tem letra ou é instrumental, o palco fica sozinho e centralizado, em coluna única. Os avisos "Buscando letra…" e "Sem letra disponível" ficam para o **Clássico** e para o mobile, onde a letra fica abaixo do vídeo e não disputa largura com ele. Isso corrigiu também um caso em que desligar "Letra da música" em Perfil → Configurações não escondia o container no Moderno: a regra `.exp-lyrics.hidden` perdia em especificidade para o seletor com ID do layout.
 - **Gestos no Modo TV (mobile)**: com o vídeo em tela cheia, **um toque** dá play/pause; **dois toques no lado direito** avançam 5s e **dois toques no lado esquerdo** retrocedem 5s — acumulativos (toques seguidos somam +5s, +10s…), com um indicador visual e limites no início/fim da faixa.
 - **Links Salvos**: galeria de vídeos/playlists do YouTube salvos, com fixar no topo e ocultar da Home. Os ocultos ficam na seção **"Ocultos da Home"** da Biblioteca e o botão de check os **restaura no Início sem removê-los** dos links salvos (o botão "Remover", na grade principal, é o único que exclui de fato). Ao salvar, o **nome e a capa** do vídeo/playlist são resolvidos na hora (oEmbed/metadados) e persistidos junto com o item — o cartão já aparece completo no Início e na Biblioteca, inclusive no mobile; o preview de URL na Busca também mostra nome e capa de playlists.
 
