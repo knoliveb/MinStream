@@ -2695,6 +2695,59 @@ body, button, input {
 /* ===== Player expandido: preenche a area principal ===== */
 #theater-backdrop { display: none !important; }
 
+/* Fundo reativo do player expandido (desktop) — irmão do #expanded-player,
+   com o MESMO retângulo, logo abaixo dele. Vive fora do player porque o
+   player rola: assim o fundo fica parado enquanto o conteúdo desliza,
+   exatamente como no mobile. Três camadas:
+     .exp-bg    — a capa da faixa desfocada (var(--exp-bg))
+     .exp-tint  — um tom sólido tirado da capa (var(--exp-accent)), que
+                  transiciona suavemente a cada troca de faixa
+     .exp-scrim — gradiente escuro fixo, garante contraste do texto */
+#exp-backdrop {
+  display: none;
+  position: fixed;
+  top: var(--topbar-h);
+  left: var(--panel-gap);
+  right: var(--panel-gap);
+  bottom: var(--dock-h);
+  z-index: 299;                /* logo abaixo do #expanded-player (300) */
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0a0a0a;         /* base sólida: nunca revela o app atrás */
+  pointer-events: none;
+  contain: paint;
+}
+body.theater-open:not(.mobile-theater) #exp-backdrop {
+  display: block;
+  animation: expFadeIn 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+#exp-backdrop .exp-bg,
+#exp-backdrop .exp-tint,
+#exp-backdrop .exp-scrim { position: absolute; }
+#exp-backdrop .exp-bg {
+  inset: -60px;
+  background-image: var(--exp-bg, none);
+  background-size: cover;
+  background-position: center;
+  filter: blur(50px) saturate(160%) brightness(0.5);
+}
+#exp-backdrop .exp-tint {
+  inset: 0;
+  background-color: var(--exp-accent, transparent);
+  opacity: 0.5;
+  transition: background-color 0.7s ease;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,0.45) 50%, transparent 88%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,0.45) 50%, transparent 88%);
+}
+#exp-backdrop .exp-scrim {
+  inset: 0;
+  background: linear-gradient(180deg,
+    rgba(0,0,0,0.22) 0%,
+    rgba(0,0,0,0.40) 42%,
+    rgba(0,0,0,0.72) 76%,
+    rgba(0,0,0,0.92) 100%);
+}
+
 #expanded-player {
   position: fixed;
   top: var(--topbar-h);
@@ -2703,8 +2756,9 @@ body, button, input {
   bottom: var(--dock-h);
   z-index: 300;
   border-radius: 10px;
-  background:
-    linear-gradient(to bottom, rgba(88, 82, 64, 0.9) 0%, rgba(42, 40, 33, 0.96) 45%, #121212 100%);
+  /* Transparente de propósito: quem pinta o fundo é o #exp-backdrop,
+     que fica no mesmo retângulo, uma camada abaixo (z-index 299). */
+  background: transparent;
   padding: 20px 28px;
   gap: 0;
   display: none;
@@ -2892,11 +2946,51 @@ body, button, input {
   color: var(--text);
   margin-bottom: 14px;
 }
+/* Wrapper do carrossel: faixa rolável no meio, setas nas laterais.
+   No layout clássico as setas ficam ocultas (a faixa já rola sozinha);
+   o layout moderno as liga — ver bloco "Layout MODERNO". */
+.exp-related-carousel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .exp-related-row {
   display: flex;
   gap: 14px;
   overflow-x: auto;
   padding-bottom: 10px;
+  /* Como agora é filho flex do wrapper, precisa ocupar a largura toda e
+     poder encolher — senão a faixa rolável tentaria ficar do tamanho do
+     conteúdo e vazaria para fora do container. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.exp-related-arrow {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.10);
+  color: var(--text);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: center;
+  transition: opacity 0.2s ease, background 0.15s ease, transform 0.15s ease;
+}
+.exp-related-arrow:hover { background: rgba(255,255,255,0.18); transform: scale(1.08); }
+.exp-related-arrow:active { transform: scale(0.92); }
+/* Fim da faixa: a seta some, mas o espaço continua reservado (sem pulos) */
+.exp-related-arrow.is-off { opacity: 0; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  #exp-backdrop .exp-tint { transition: none; }
+  body.theater-open:not(.mobile-theater) #exp-backdrop { animation: none; }
+  #expanded-player.layout-modern .exp-related-row { scroll-behavior: auto; }
+  .exp-related-arrow:hover,
+  .exp-related-arrow:active { transform: none; }
 }
 .exp-related-card {
   flex: none;
@@ -3061,20 +3155,39 @@ body, button, input {
     max-width: 100%;
     margin: 0;
   }
-  /* No moderno, os relacionados podem quebrar em grade (em vez de rolar) */
+  /* No moderno os relacionados são um CARROSSEL HORIZONTAL: a faixa rola
+     no eixo X (arrasto, trackpad ou setas) em vez de quebrar em grade.
+     As setas só existem aqui — no clássico a faixa já rolava sozinha. */
+  #expanded-player.layout-modern .exp-related-arrow { display: flex; }
   #expanded-player.layout-modern .exp-related-row {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    overflow-x: visible;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-behavior: smooth;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  #expanded-player.layout-modern .exp-related-row::-webkit-scrollbar { display: none; }
+  #expanded-player.layout-modern .exp-related-card {
+    flex: 0 0 auto;
+    width: clamp(190px, 20vw, 260px);
+    scroll-snap-align: start;
   }
 }
 
 /* Telas médias (769–1080px): as duas colunas CONTINUAM — só ajustes
-   finos: relacionados em 3 colunas e cabeçalho da letra compacto para
-   os 4 botões caberem na coluna mais estreita. */
+   finos: cards do carrossel de relacionados um pouco menores e cabeçalho
+   da letra compacto para os 4 botões caberem na coluna mais estreita. */
 @media (min-width: 769px) and (max-width: 1080px) {
-  #expanded-player.layout-modern .exp-related-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Carrossel um pouco mais compacto na coluna estreita */
+  #expanded-player.layout-modern .exp-related-card {
+    width: clamp(160px, 24vw, 210px);
   }
   #expanded-player.layout-modern .exp-lyrics .lyrics-header {
     padding: 12px 14px 10px;
@@ -3249,12 +3362,226 @@ body, button, input {
 .lyrics-overlay .lyrics-credit { padding: 6px 20px 16px; margin: 0; }
 body.lyrics-overlay-open { overflow: hidden; }
 
+/* ============================================================
+   PÁGINA DE LETRA EM TELA CHEIA (MOBILE)
+   Abre por cima do #mobile-player (z-index 500) e desliza de baixo
+   para cima; ao fechar, desliza de volta e revela a tela anterior.
+   O fundo é a MESMA cor adaptativa do container de letra
+   (--lyrics-bg, definida pelo lyrics.js a partir da capa).
+   Namespace .lp-* — não colide com .mp-* nem com o desktop.
+   ============================================================ */
+#lyrics-page {
+  position: fixed;
+  inset: 0;
+  z-index: 500;               /* acima do #mobile-player (400) */
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--safe-top, 0px) + 6px) 16px calc(var(--safe-bottom, 0px) + 18px);
+  background: var(--lyrics-bg, #26313f);
+  color: #fff;
+  /* Estado fechado: fora da tela e sem interceptar toques. Fica sempre
+     no fluxo (só invisível) para que a transição de entrada/saída rode
+     de verdade — e para que as medidas de rolagem da letra sejam
+     válidas no instante em que a tela abre. */
+  transform: translateY(100%);
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.34s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              opacity 0.24s ease,
+              visibility 0s linear 0.34s,
+              background-color 0.7s ease;
+}
+#lyrics-page.open {
+  transform: translateY(0);
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.34s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              opacity 0.24s ease,
+              visibility 0s,
+              background-color 0.7s ease;
+}
+body.lyrics-page-open { overflow: hidden; }
+
+/* ---------- Cabeçalho: fechar + título/artista ---------- */
+#lyrics-page .lp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-bottom: 10px;
+}
+#lyrics-page .lp-close,
+#lyrics-page .lp-head-spacer {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+#lyrics-page .lp-close {
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+#lyrics-page .lp-close:active { background: rgba(255,255,255,0.14); transform: scale(0.92); }
+#lyrics-page .lp-meta {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+#lyrics-page .lp-title {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#lyrics-page .lp-artist {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.82);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Letra ---------- */
+#lyrics-page .lp-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px 8px;
+  /* Some suavemente nas duas pontas, sem linha de corte */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+  scrollbar-width: none;
+}
+#lyrics-page .lp-scroll::-webkit-scrollbar { display: none; }
+#lyrics-page .lp-scroll .lyrics-line {
+  font-size: 27px;
+  line-height: 1.38;
+  padding: 11px 6px;
+}
+#lyrics-page .lp-scroll .lyrics-plain { font-size: 19px; line-height: 1.75; }
+#lyrics-page .lp-scroll .lyrics-credit { margin-top: 60px; padding-bottom: 8px; }
+
+/* ---------- Ações: traduzir e compartilhar ---------- */
+#lyrics-page .lp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  flex-shrink: 0;
+  padding: 6px 0 2px;
+}
+#lyrics-page .lp-act {
+  width: 52px;
+  height: 52px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.92);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s ease, transform 0.15s ease, color 0.15s ease;
+}
+#lyrics-page .lp-act:active { background: rgba(255,255,255,0.14); transform: scale(0.92); }
+#lyrics-page .lp-act.on { color: var(--green); }
+#lyrics-page .lp-act.hidden { display: none; }
+#lyrics-page .lp-act.busy { opacity: 0.6; pointer-events: none; }
+#lyrics-page .lp-act.busy svg { animation: lyricsSpin 0.8s linear infinite; }
+
+/* ---------- Progresso ---------- */
+#lyrics-page .lp-progress { flex-shrink: 0; margin-top: 6px; }
+#lyrics-page .lp-progress-bar {
+  position: relative;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+#lyrics-page .lp-progress-bar::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.26);
+}
+#lyrics-page .lp-progress-fill {
+  position: absolute;
+  left: 0;
+  height: 4px;
+  width: 0%;
+  border-radius: 999px;
+  background: #fff;
+}
+#lyrics-page .lp-progress-handle {
+  position: absolute;
+  left: 0%;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateX(-50%);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+#lyrics-page .lp-times {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.68);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Play/Pause ---------- */
+#lyrics-page .lp-transport {
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+#lyrics-page .lp-play {
+  width: 68px; height: 68px;
+  border-radius: 50%;
+  border: none;
+  background: #fff;
+  color: #000;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+#lyrics-page .lp-play:active { transform: scale(0.94); }
+
+/* A página é exclusiva do mobile: no desktop existe o overlay da letra */
+@media (min-width: 769px) {
+  #lyrics-page { display: none !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lyrics-line { transition: none; }
   .lyrics-line.active { transform: none; }
   .lyrics-box { transition: none; }
   .lyrics-act:active { transform: none; }
   .lyrics-translate.busy svg { animation: none; }
+  /* A página de letra aparece sem deslizar (só troca de estado) */
+  #lyrics-page,
+  #lyrics-page.open { transition: visibility 0s; transform: none; }
+  #lyrics-page { opacity: 0; }
+  #lyrics-page.open { opacity: 1; }
+  #lyrics-page .lp-close:active,
+  #lyrics-page .lp-act:active,
+  #lyrics-page .lp-play:active { transform: none; }
+  #lyrics-page .lp-act.busy svg { animation: none; }
 }
 
 /* Video expandido: z-index 320 acima do expanded-player (z-index 300) */
@@ -3712,6 +4039,9 @@ body.tv-mode #tv-exit { display: flex; }
      abrimos o #mobile-player isolado. As regras de theater mobile antigas
      foram removidas para evitar conflitos. Ver bloco "PLAYER MOBILE". */
   body.mobile-theater #expanded-player { display: none !important; }
+  /* O fundo do expandido desktop tambem nao existe aqui: o #mobile-player
+     tem o proprio (.mp-bg / .mp-scrim). */
+  #exp-backdrop { display: none !important; }
 
   /* ---------- Toque em vez de hover ---------- */
   /* Acoes que so apareciam no hover ficam sempre visiveis */

@@ -827,6 +827,117 @@ if (typeof ResizeObserver !== 'undefined') {
   if (mpStage) syncObserver.observe(mpStage);
 }
 
+// ============================================
+// FUNDO DO PLAYER EXPANDIDO (DESKTOP)
+// Mesmo comportamento do player mobile: a capa da faixa entra desfocada
+// atras do conteudo. Alem disso o fundo REAGE A COR DA CAPA — a
+// thumbnail e amostrada num canvas pequeno e o matiz dominante vira um
+// tom que tinge o topo do fundo, com transicao suave na troca de faixa.
+// Alimenta duas variaveis no <body>, lidas pelo #exp-backdrop no CSS:
+//   --exp-bg     -> url() da capa
+//   --exp-accent -> cor derivada da capa (ausente = fundo neutro escuro)
+// Mesma ideia (e mesmo criterio de fallback) do fundo do container de
+// letra; aqui a amostragem e independente, sem depender do lyrics.js.
+// ============================================
+const ExpBackdrop = (function () {
+  const accentCache = new Map(); // url da capa -> cor css (ou null)
+  const CACHE_CAP = 80;
+  let currentUrl = '';
+
+  function coverUrlOf(t) {
+    if (!t) return '';
+    return t.videoId
+      ? 'https://i.ytimg.com/vi/' + t.videoId + '/hqdefault.jpg'
+      : (t.cover || '');
+  }
+
+  function setVar(name, value) {
+    try {
+      if (value) document.body.style.setProperty(name, value);
+      else document.body.style.removeProperty(name);
+    } catch (_) {}
+  }
+
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) return { h: 0, s: 0, l };
+    const d = max - min;
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h;
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = ((b - r) / d + 2);
+    else h = ((r - g) / d + 4);
+    return { h: h * 60, s, l };
+  }
+
+  // Matiz dominante ponderado por saturacao x brilho (buckets de 30 graus).
+  // Capas acinzentadas ou ilegiveis (CORS) retornam null -> fundo neutro.
+  function computeAccent(img) {
+    const canvas = document.createElement('canvas');
+    const W = 32, H = 18;
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext && canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, W, H);
+    const data = ctx.getImageData(0, 0, W, H).data; // lanca se a imagem for "tainted"
+
+    const B = 12;
+    const wSum = new Array(B).fill(0);
+    const rSum = new Array(B).fill(0), gSum = new Array(B).fill(0), bSum = new Array(B).fill(0);
+    let colored = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 128) continue;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const { h, s, l } = rgbToHsl(r, g, b);
+      if (l < 0.1 || l > 0.92 || s < 0.15) continue;
+      const w = s * (0.4 + 0.6 * l);
+      const k = Math.min(B - 1, Math.floor(h / (360 / B)));
+      wSum[k] += w; rSum[k] += r * w; gSum[k] += g * w; bSum[k] += b * w;
+      colored += w;
+    }
+    if (colored < 4) return null;
+
+    let best = 0;
+    for (let k = 1; k < B; k++) if (wSum[k] > wSum[best]) best = k;
+    const w = wSum[best] || 1;
+    const { h, s } = rgbToHsl(rSum[best] / w, gSum[best] / w, bSum[best] / w);
+    // Tom com o matiz da capa, saturacao contida e luz baixa: cor evidente
+    // sem competir com o texto branco por cima.
+    const s2 = Math.round(Math.min(0.66, Math.max(0.30, s)) * 100);
+    return 'hsl(' + Math.round(h) + ', ' + s2 + '%, 30%)';
+  }
+
+  function apply(track) {
+    const url = coverUrlOf(track !== undefined ? track : state.currentTrack);
+    currentUrl = url;
+    setVar('--exp-bg', url ? 'url("' + url + '")' : 'none');
+    if (!url) { setVar('--exp-accent', null); return; }
+    if (accentCache.has(url)) { setVar('--exp-accent', accentCache.get(url)); return; }
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous'; // i.ytimg.com envia CORS: da para ler os pixels
+      img.decoding = 'async';
+      img.onload = () => {
+        let color = null;
+        try { color = computeAccent(img); } catch (_) { color = null; }
+        accentCache.set(url, color);
+        if (accentCache.size > CACHE_CAP) {
+          const first = accentCache.keys().next().value;
+          if (first !== undefined) accentCache.delete(first);
+        }
+        if (url === currentUrl) setVar('--exp-accent', color);
+      };
+      img.onerror = () => { if (url === currentUrl) setVar('--exp-accent', null); };
+      img.src = url;
+    } catch (_) { setVar('--exp-accent', null); }
+  }
+
+  return { apply };
+})();
+
 function fillExpandedCover() {
   const t = state.currentTrack;
   const img = document.getElementById('exp-cover-img');
@@ -836,16 +947,14 @@ function fillExpandedCover() {
     img.src = '';
     infoTitle.textContent = 'Nada tocando';
     infoArtist.textContent = '';
-    try { document.body.style.setProperty('--exp-bg', 'none'); } catch (_) {}
+    ExpBackdrop.apply(null);
     return;
   }
   img.src = t.videoId
     ? 'https://i.ytimg.com/vi/' + t.videoId + '/hqdefault.jpg'
     : (t.cover || '');
-  // Fundo do player expandido (mobile): a capa em tela cheia com gradiente
-  try {
-    document.body.style.setProperty('--exp-bg', img.src ? 'url("' + img.src + '")' : 'none');
-  } catch (_) {}
+  // Fundo do player expandido: capa desfocada + tom tirado da propria capa
+  ExpBackdrop.apply(t);
   infoTitle.textContent = t.title || '';
   infoArtist.textContent = t.artist || '';
   // Espelha capa/fundo no player mobile
@@ -961,6 +1070,7 @@ function openExpanded() {
   } else {
     expandedPlayer.classList.add('open');
     ExpandedLayout.apply(); // aplica o layout escolhido (clássico/moderno)
+    ExpBackdrop.apply();    // fundo com a capa desfocada + cor da capa
     setPlayerMode(state.playerMode || 'video');
   }
   updateExpandedContext();
@@ -1064,6 +1174,52 @@ function updateExpandedContext() {
   if (mpLabel) mpLabel.textContent = isList ? 'TOCANDO DA PLAYLIST' : 'TOCANDO AGORA';
 }
 
+// ============================================
+// CARROSSEL DOS VIDEOCLIPES RELACIONADOS (player expandido desktop)
+// No layout MODERNO a faixa rola no eixo X: as setas laterais deslizam
+// uma "pagina" inteira (quantos cards couberem na largura visivel) e se
+// apagam ao chegar nas pontas. No layout Classico o CSS mantem as setas
+// ocultas — a faixa continua rolando por arrasto/trackpad, como antes.
+// O mobile (#mp-related-row) nao tem wrapper e nao e afetado.
+// ============================================
+let updateRelatedArrows = function () {};
+
+function initRelatedCarousel() {
+  const row = document.getElementById('exp-related-row');
+  const prev = document.getElementById('exp-related-prev');
+  const next = document.getElementById('exp-related-next');
+  if (!row || !prev || !next) return;
+
+  const GAP = 14; // mesmo gap do CSS da faixa
+
+  // Quantos cards cabem na area visivel -> passo de uma pagina
+  function pageStep() {
+    const card = row.querySelector('.exp-related-card');
+    const w = card ? card.getBoundingClientRect().width : 220;
+    const perPage = Math.max(1, Math.floor((row.clientWidth + GAP) / (w + GAP)));
+    return (w + GAP) * perPage;
+  }
+
+  prev.addEventListener('click', () => row.scrollBy({ left: -pageStep(), behavior: 'smooth' }));
+  next.addEventListener('click', () => row.scrollBy({ left: pageStep(), behavior: 'smooth' }));
+
+  updateRelatedArrows = function () {
+    const max = row.scrollWidth - row.clientWidth;
+    const rolavel = max > 5;
+    prev.classList.toggle('is-off', !rolavel || row.scrollLeft <= 5);
+    next.classList.toggle('is-off', !rolavel || row.scrollLeft >= max - 5);
+  };
+
+  row.addEventListener('scroll', updateRelatedArrows, { passive: true });
+  window.addEventListener('resize', updateRelatedArrows);
+  // Troca de layout (classico <-> moderno) e abertura do player mudam a
+  // largura da faixa: o observer reavalia as setas sozinho.
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(updateRelatedArrows).observe(row);
+  }
+  updateRelatedArrows();
+}
+
 async function loadRelatedVideos() {
   const t = state.currentTrack;
   // Preenche o player ativo: mobile usa #mp-related, desktop usa #exp-related
@@ -1100,10 +1256,16 @@ async function loadRelatedVideos() {
   });
   // Respeita a preferencia de visibilidade do usuario (mobile)
   if (expandedIsMobile) applyMobilePlayerPrefs();
+  // Desktop: lista nova comeca do inicio e as setas sao reavaliadas
+  else { row.scrollLeft = 0; updateRelatedArrows(); }
 }
 
 function closeExpanded() {
   isExpanded = false;
+  // A letra em tela cheia vive por cima do player: sai junto com ele
+  try {
+    if (typeof Lyrics !== 'undefined' && Lyrics.pageOpen && Lyrics.pageOpen()) Lyrics.closePage();
+  } catch (_) {}
   document.body.classList.remove('theater-open', 'mobile-theater');
   document.body.removeAttribute('data-mp-mode');
   expandedPlayer.classList.remove('open');
@@ -1186,6 +1348,82 @@ function setupMobileScrub() {
   bar.addEventListener('touchstart', (e) => { dragging = true; preview(pctFromEvent(e)); }, { passive: true });
   bar.addEventListener('touchmove', (e) => { if (dragging) { preview(pctFromEvent(e)); e.preventDefault(); } }, { passive: false });
   bar.addEventListener('touchend', (e) => { if (dragging) { dragging = false; commit(pctFromEvent(e.changedTouches ? { touches: e.changedTouches } : e)); } });
+  bar.addEventListener('click', (e) => commit(pctFromEvent(e)));
+}
+
+// ============================================
+// PAGINA DE LETRA EM TELA CHEIA (MOBILE) — transporte
+// A letra em si (linhas, destaque e rolagem) e do lyrics.js, que decide
+// quando a tela pode abrir. Aqui ficam titulo/artista, barra de
+// progresso com arraste, tempos e play/pause. O syncLyricsPage e
+// chamado pelo poll (updatePlayerUI) enquanto a tela esta aberta e uma
+// vez pelo lyrics.js no momento da abertura.
+// ============================================
+let lpScrubbing = false;
+
+function lyricsPageOpen() {
+  return document.body.classList.contains('lyrics-page-open');
+}
+
+function syncLyricsPage() {
+  const page = document.getElementById('lyrics-page');
+  if (!page) return;
+  const t = state.currentTrack;
+
+  const titleEl = document.getElementById('lp-title');
+  const artistEl = document.getElementById('lp-artist');
+  if (titleEl) titleEl.textContent = t ? (t.title || '') : '';
+  if (artistEl) artistEl.textContent = t ? (t.artist || '') : '';
+
+  const icPlay = document.getElementById('lp-icon-play');
+  const icPause = document.getElementById('lp-icon-pause');
+  if (icPlay && icPause) {
+    icPlay.style.display = state.isPlaying ? 'none' : '';
+    icPause.style.display = state.isPlaying ? '' : 'none';
+  }
+
+  if (lpScrubbing) return; // nao sobrescreve o arraste em andamento
+  const pct = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0;
+  const fill = document.getElementById('lp-progress-fill');
+  const handle = document.getElementById('lp-progress-handle');
+  const cur = document.getElementById('lp-time-current');
+  const tot = document.getElementById('lp-time-total');
+  if (fill) fill.style.width = pct + '%';
+  if (handle) handle.style.left = pct + '%';
+  if (cur) cur.textContent = fmtTime(state.currentTime);
+  if (tot) tot.textContent = fmtTime(state.duration);
+}
+
+function setupLyricsPageControls() {
+  const play = document.getElementById('lp-play');
+  if (play) play.addEventListener('click', togglePlay);
+
+  const bar = document.getElementById('lp-progress-bar');
+  if (!bar) return;
+  function pctFromEvent(e) {
+    const rect = bar.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return Math.max(0, Math.min(1, x / rect.width));
+  }
+  function preview(pct) {
+    const fill = document.getElementById('lp-progress-fill');
+    const handle = document.getElementById('lp-progress-handle');
+    const cur = document.getElementById('lp-time-current');
+    if (fill) fill.style.width = (pct * 100) + '%';
+    if (handle) handle.style.left = (pct * 100) + '%';
+    if (cur && state.duration > 0) cur.textContent = fmtTime(pct * state.duration);
+  }
+  function commit(pct) {
+    lpScrubbing = false;
+    if (state.duration > 0) seekToTime(pct * state.duration);
+  }
+  bar.addEventListener('touchstart', (e) => { lpScrubbing = true; preview(pctFromEvent(e)); }, { passive: true });
+  bar.addEventListener('touchmove', (e) => { if (lpScrubbing) { preview(pctFromEvent(e)); e.preventDefault(); } }, { passive: false });
+  bar.addEventListener('touchend', (e) => {
+    if (!lpScrubbing) return;
+    commit(pctFromEvent(e.changedTouches ? { touches: e.changedTouches } : e));
+  });
+  bar.addEventListener('touchcancel', () => { lpScrubbing = false; });
   bar.addEventListener('click', (e) => commit(pctFromEvent(e)));
 }
 // Aplica a preferencia de modo (capa estatica x video) ja no dock
@@ -4134,6 +4372,13 @@ function openPlaylistChooser(item) {
 
 // Cartao de link salvo reutilizavel (usado na Biblioteca e na secao da Home).
 // onChange e chamado apos fixar/remover para atualizar a lista que o exibe.
+// mode define o que o botao do canto faz:
+//   undefined      -> 'Remover' (exclui o link de vez; usado na Biblioteca)
+//   'hideFromHome' -> 'Ocultar da Home' (usado no carrossel do Inicio)
+//   'restoreToHome'-> 'Restaurar na Home' (usado na lista "Ocultos da Home")
+// IMPORTANTE: a acao do botao e decidida AQUI. Trocar o handler por fora
+// (elemento.onclick) nao substitui este listener — os dois disparariam, e o
+// link acabava removido do armazenamento ao ser restaurado.
 function createGalleryCard(item, onChange, mode) {
   const key = Gallery.keyOf(item);
   const isPlaylist = !!item.list;
@@ -4191,14 +4436,23 @@ function createGalleryCard(item, onChange, mode) {
 
   // Botao remover
   const del = document.createElement('button');
-  del.className = 'gallery-del';
-  del.title = mode === 'hideFromHome' ? 'Ocultar da Home' : 'Remover';
-  del.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>';
+  del.className = 'gallery-del'; // o visual verde vem de #gallery-hidden-grid
+  del.title = mode === 'hideFromHome' ? 'Ocultar da Home'
+    : mode === 'restoreToHome' ? 'Restaurar na Home'
+    : 'Remover';
+  del.innerHTML = mode === 'restoreToHome'
+    ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke-linecap="round"/></svg>';
   del.addEventListener('click', (e) => {
     e.stopPropagation();
     if (mode === 'hideFromHome') {
       Gallery.hideFromHome(key);
       showToast('Oculto da Home. Acesse "Links Salvos" na Biblioteca para ver todos.');
+    } else if (mode === 'restoreToHome') {
+      // Apenas volta a aparecer no Inicio — o link continua salvo.
+      Gallery.unhideFromHome(key);
+      showToast('Restaurado na Home!');
+      renderHomeSaved(); // se o carrossel do Inicio existir, repovoa
     } else {
       Gallery.remove(key);
     }
@@ -4283,26 +4537,14 @@ function renderSaved() {
   const hiddenGrid = document.getElementById('gallery-hidden-grid');
   if (hiddenGrid) {
     hiddenItems.forEach((item) => {
-      const card = createGalleryCard(item, renderSaved);
+      // O modo 'restoreToHome' ja monta o botao certo (e so ele) — restaurar
+      // devolve o item a Home sem tirar nada dos links salvos.
+      const card = createGalleryCard(item, renderSaved, 'restoreToHome');
       // Adicionar badge de "Oculto da Home" no card
       const badge = document.createElement('div');
       badge.style.cssText = 'position:absolute;top:6px;left:50%;transform:translateX(-50%);z-index:5;padding:2px 8px;font-size:9px;font-weight:700;letter-spacing:0.06em;color:#fff;background:rgba(10,228,72,0.85);border-radius:4px;pointer-events:none;';
       badge.textContent = 'OCULTO DA HOME';
       card.querySelector('.album-cover-wrap').appendChild(badge);
-      // Mudar o título do botão de remover para "Restaurar na Home"
-      const delBtn = card.querySelector('.gallery-del');
-      if (delBtn) {
-        delBtn.title = 'Restaurar na Home';
-        delBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-        delBtn.onclick = (e) => {
-          e.stopPropagation();
-          Gallery.unhideFromHome(Gallery.keyOf(item));
-          showToast('Restaurado na Home!');
-          renderSaved();
-          // Se estiver na home, atualiza o carrossel
-          if (state.view === 'home') renderHomeSaved();
-        };
-      }
       hiddenGrid.appendChild(card);
     });
   }
@@ -6474,6 +6716,9 @@ function updatePlayerUI() {
     if (trackChanged) {
       updateExpandedContext();
       loadRelatedVideos();
+      // Fundo do expandido desktop segue a capa em QUALQUER modo (o
+      // fillExpandedCover acima so roda no modo capa).
+      if (!expandedIsMobile && state.playerMode !== 'cover') ExpBackdrop.apply();
     }
   }
 
@@ -6526,6 +6771,9 @@ function updatePlayerUI() {
     if (mpRepeat && state.repeatMode !== _uiCache.repeat) mpRepeat.classList.toggle('active', state.repeatMode !== 'off');
     if (state.playerMode === 'queue' && queueDirty) buildMobileQueue(false);
   }
+
+  // ----- Pagina de letra em tela cheia (mobile), quando aberta -----
+  if (lyricsPageOpen()) syncLyricsPage();
 
   _uiCache.trackId = t.id;
   _uiCache.playing = state.isPlaying;
@@ -6781,6 +7029,12 @@ document.addEventListener('keydown', (e) => {
       break;
     case 'Escape':
       document.getElementById('help-overlay').style.display = 'none';
+      // Com a letra em tela cheia aberta, Esc volta para a tela anterior
+      // (o player) em vez de fechar tudo de uma vez.
+      if (typeof Lyrics !== 'undefined' && Lyrics.pageOpen && Lyrics.pageOpen()) {
+        Lyrics.closePage();
+        break;
+      }
       closeExpanded();
       break;
   }
@@ -7297,6 +7551,8 @@ if (typeof Reco !== 'undefined') Reco.hydrateLikes();
 renderSidebarPlaylists();
 renderHome();
 initSidebar();
+initRelatedCarousel(); // setas do carrossel de relacionados (layout Moderno)
+setupLyricsPageControls(); // transporte da letra em tela cheia (mobile)
 
 // Restaura a ultima musica reproduzida da sessao anterior
 (function restoreLastSession() {

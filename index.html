@@ -147,6 +147,71 @@
     </div>
   </div>
 
+  <!-- ============================================================
+       PÁGINA DE LETRA EM TELA CHEIA (MOBILE)
+       Abre ao tocar no container de Letra do #mobile-player e volta
+       para ele ao fechar (fica por cima, z-index 500). Só abre quando
+       há letra carregada — o lyrics.js decide. A letra em si (linhas,
+       destaque, rolagem que acompanha) é preenchida pelo lyrics.js; o
+       transporte (progresso, tempos e play/pause) é do app.js.
+       ============================================================ -->
+  <div id="lyrics-page" aria-hidden="true">
+    <div class="lp-head">
+      <button class="lp-close" id="lp-close" title="Fechar" aria-label="Fechar letra">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="lp-meta">
+        <div class="lp-title" id="lp-title"></div>
+        <div class="lp-artist" id="lp-artist"></div>
+      </div>
+      <span class="lp-head-spacer" aria-hidden="true"></span>
+    </div>
+
+    <div class="lp-scroll" id="lp-scroll"></div>
+
+    <div class="lp-actions">
+      <button class="lp-act" id="lp-translate" aria-pressed="false" title="Traduzir a letra" aria-label="Traduzir a letra">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M8 3v2c0 4.5-2 7-5 8"/><path d="M5 9c0 2.4 2.6 4.5 6 5"/><path d="M13 21l4-9 4 9"/><path d="M14.5 17h5"/></svg>
+      </button>
+      <button class="lp-act" id="lp-share" title="Compartilhar a música" aria-label="Compartilhar a música">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+      </button>
+    </div>
+
+    <div class="lp-progress">
+      <div class="lp-progress-bar" id="lp-progress-bar">
+        <div class="lp-progress-fill" id="lp-progress-fill"></div>
+        <div class="lp-progress-handle" id="lp-progress-handle"></div>
+      </div>
+      <div class="lp-times">
+        <span id="lp-time-current">0:00</span>
+        <span id="lp-time-total">0:00</span>
+      </div>
+    </div>
+
+    <div class="lp-transport">
+      <button class="lp-play" id="lp-play" title="Tocar/Pausar" aria-label="Tocar ou pausar">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor" id="lp-icon-play"><path d="M8 5v14l11-7z"/></svg>
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor" id="lp-icon-pause" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       FUNDO DO PLAYER EXPANDIDO (DESKTOP) — mesmo comportamento do
+       player mobile: a capa da faixa desfocada + um tom tirado da
+       propria capa + gradiente escuro por cima. Fica FORA do
+       #expanded-player (que rola) para nao subir junto com o conteudo;
+       ocupa exatamente o mesmo retangulo, logo abaixo dele (z-index 299).
+       As variaveis --exp-bg e --exp-accent sao alimentadas pelo app.js.
+       ============================================================ -->
+  <div id="exp-backdrop" aria-hidden="true">
+    <div class="exp-bg"></div>
+    <div class="exp-tint"></div>
+    <div class="exp-scrim"></div>
+  </div>
+
   <!-- Player expandido: tres modos de visualizacao -->
   <div id="expanded-player" data-mode="video">
     <div class="exp-topbar">
@@ -224,9 +289,19 @@
       </div>
     </div>
     </div>
+    <!-- Relacionados: no layout Moderno vira um carrossel horizontal
+         (as setas so aparecem la; no Classico a faixa rola como antes) -->
     <div class="exp-related" id="exp-related">
       <h3>Videoclipes relacionados</h3>
-      <div class="exp-related-row" id="exp-related-row"></div>
+      <div class="exp-related-carousel">
+        <button class="exp-related-arrow exp-related-prev" id="exp-related-prev" title="Anterior" aria-label="Anterior">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="exp-related-row" id="exp-related-row"></div>
+        <button class="exp-related-arrow exp-related-next" id="exp-related-next" title="Próximo" aria-label="Próximo">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
     </div>
   </div>
 

@@ -53,6 +53,8 @@ const Lyrics = (function () {
   function setEnabled(on) {
     try { localStorage.setItem(PREF_KEY, on ? '1' : '0'); } catch (_) {}
     applyVisibility();
+    // Desligou a letra com a tela cheia aberta: ela sai junto
+    if (!on) closePage();
   }
 
   function syncOn() {
@@ -444,6 +446,7 @@ const Lyrics = (function () {
   let progScrollUntil = 0; // marca escritas de scroll do próprio módulo
   let wasOpen = false;
   let translated = false;  // exibindo a tradução da letra?
+  let translatedText = ''; // texto traduzido em exibição (para as telas cheias)
   const translateCache = new Map(); // texto -> tradução (por sessão)
 
   const reducedMotion = (typeof matchMedia === 'function')
@@ -459,13 +462,71 @@ const Lyrics = (function () {
   }
 
   // ---------------------------------------------------------------
-  // Overlay de tela cheia (botão expandir): mostra a letra em foco,
-  // com o mesmo fundo adaptativo e acompanhamento da linha ativa.
+  // Superfícies de letra em TELA CHEIA
+  // Duas telas mostram a MESMA letra fora do container padrão: o
+  // overlay do desktop (botão expandir) e a página de letra do mobile
+  // (toque no container). Em vez de duplicar o destaque da linha ativa
+  // e o seguidor de rolagem, cada uma se registra aqui e o módulo cuida
+  // das duas do mesmo jeito.
+  //   cfg = { isOpen(), getScroll(), close(), onFill? }
+  // ---------------------------------------------------------------
+  const surfaces = [];
+
+  function addSurface(cfg) {
+    const s = Object.assign({ lines: [], activeIdx: -1 }, cfg);
+    surfaces.push(s);
+    return s;
+  }
+
+  function hasLyricsNow() {
+    return !!cur && (cur.status === 'synced' || cur.status === 'plain');
+  }
+
+  function fillSurface(s) {
+    const scroll = s.getScroll();
+    if (!scroll) return;
+    if (translated && translatedText) {
+      // Exibindo a tradução: as telas cheias mostram o mesmo texto
+      const d = document.createElement('div');
+      d.className = 'lyrics-plain';
+      d.textContent = translatedText;
+      scroll.replaceChildren(d);
+      s.lines = [];
+    } else {
+      scroll.replaceChildren(buildContent(cur));
+      s.lines = Array.from(scroll.querySelectorAll('.lyrics-line'));
+    }
+    scroll.scrollTop = 0;
+    s.activeIdx = -1;
+    if (s.onFill) s.onFill();
+  }
+
+  // Copia o fundo adaptativo (cor da capa) do container visível para uma
+  // tela cheia, que vive fora dele e não herdaria a variável.
+  function inheritBg(el) {
+    if (!el) return;
+    const vk = visibleSide() || 'exp';
+    const bg = els[vk] && els[vk].root && els[vk].root.style.getPropertyValue('--lyrics-bg');
+    if (bg) el.style.setProperty('--lyrics-bg', bg);
+    else el.style.removeProperty('--lyrics-bg');
+  }
+
+  // Faixa/letra mudou com uma tela cheia aberta: refaz o conteúdo — e
+  // fecha a tela quando a nova faixa não tem letra para mostrar.
+  function syncSurfaces() {
+    surfaces.forEach(s => {
+      if (!s.isOpen()) return;
+      if (!hasLyricsNow()) { s.close(); return; }
+      fillSurface(s);
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // Overlay de tela cheia do DESKTOP (botão expandir): mostra a letra
+  // em foco, com o mesmo fundo adaptativo e o acompanhamento da linha.
   // ---------------------------------------------------------------
   let overlayEl = null;
   let overlayScroll = null;
-  let overlayLines = [];
-  let overlayActiveIdx = -1;
 
   function buildOverlay() {
     if (overlayEl) return overlayEl;
@@ -497,39 +558,73 @@ const Lyrics = (function () {
 
   function overlayOpen() { return !!(overlayEl && !overlayEl.classList.contains('hidden')); }
 
-  function fillOverlay() {
-    if (!overlayScroll) return;
-    overlayScroll.replaceChildren(buildContent(cur));
-    overlayScroll.scrollTop = 0;
-    overlayLines = Array.from(overlayScroll.querySelectorAll('.lyrics-line'));
-    overlayActiveIdx = -1;
-    // Herda o fundo adaptativo do lado visível
-    const vk = visibleSide() || 'exp';
-    const bg = els[vk] && els[vk].root && els[vk].root.style.getPropertyValue('--lyrics-bg');
-    if (overlayEl) {
-      if (bg) overlayEl.style.setProperty('--lyrics-bg', bg);
-      else overlayEl.style.removeProperty('--lyrics-bg');
-    }
-  }
-
-  function openOverlay() {
-    if (!cur || (cur.status !== 'synced' && cur.status !== 'plain')) return;
-    buildOverlay();
-    fillOverlay();
-    overlayEl.classList.remove('hidden');
-    document.body.classList.add('lyrics-overlay-open');
-  }
-
   function closeOverlay() {
     if (overlayEl) overlayEl.classList.add('hidden');
     document.body.classList.remove('lyrics-overlay-open');
   }
 
-  // Mantém o overlay em sincronia quando a faixa/letra muda com ele aberto
-  function syncOverlay() {
-    if (!overlayOpen()) return;
-    if (!cur || (cur.status !== 'synced' && cur.status !== 'plain')) { closeOverlay(); return; }
-    fillOverlay();
+  const overlaySurface = addSurface({
+    isOpen: overlayOpen,
+    getScroll: () => overlayScroll,
+    close: closeOverlay,
+    onFill: () => inheritBg(overlayEl),
+  });
+
+  function openOverlay() {
+    if (!hasLyricsNow()) return;
+    buildOverlay();
+    fillSurface(overlaySurface);
+    overlayEl.classList.remove('hidden');
+    document.body.classList.add('lyrics-overlay-open');
+  }
+
+  // ---------------------------------------------------------------
+  // Página de letra em TELA CHEIA do MOBILE
+  // Tocar no container de Letra do #mobile-player abre esta tela; o
+  // botão de fechar (ou Esc) volta para a tela anterior, com a mesma
+  // animação ao contrário. SÓ abre quando há letra carregada — com
+  // "Buscando letra…", "Sem letra disponível" ou faixa instrumental o
+  // toque não faz nada. O transporte (progresso, tempos e play/pause)
+  // é do app.js; aqui ficam a letra e os botões de traduzir/compartilhar.
+  // ---------------------------------------------------------------
+  const page = {
+    root: document.getElementById('lyrics-page'),
+    scroll: document.getElementById('lp-scroll'),
+    close: document.getElementById('lp-close'),
+    translate: document.getElementById('lp-translate'),
+    share: document.getElementById('lp-share'),
+  };
+
+  function pageOpen() { return !!(page.root && page.root.classList.contains('open')); }
+
+  // Condições para abrir: existe a tela, a letra está ligada nas
+  // configurações, o player aberto é o mobile e há letra de fato.
+  function canOpenPage() {
+    return !!(page.root && enabled() && openIsMobile() && hasLyricsNow());
+  }
+
+  const pageSurface = addSurface({
+    isOpen: pageOpen,
+    getScroll: () => page.scroll,
+    close: closePage,
+    onFill: () => inheritBg(page.root),
+  });
+
+  function openPage() {
+    if (!canOpenPage() || pageOpen()) return;
+    fillSurface(pageSurface);
+    page.root.classList.add('open');
+    page.root.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('lyrics-page-open');
+    // Título/artista, progresso e play/pause vêm do app.js
+    try { if (typeof syncLyricsPage === 'function') syncLyricsPage(); } catch (_) {}
+  }
+
+  function closePage() {
+    if (!page.root) return;
+    page.root.classList.remove('open');
+    page.root.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('lyrics-page-open');
   }
 
   function statusNode(text) {
@@ -586,6 +681,7 @@ const Lyrics = (function () {
     activeIdx = -1;
     userScrollUntil = 0;
     translated = false; // nova faixa/estado: volta ao texto original
+    translatedText = '';
     const entry = cur;
     const canSync = !!(entry && entry.status === 'synced');
     const sOn = syncOn();
@@ -627,7 +723,12 @@ const Lyrics = (function () {
     });
     lineEls.exp = side2Lines(els.exp);
     lineEls.mp = side2Lines(els.mp);
-    syncOverlay();
+    // Botões da página mobile em tela cheia (traduzir/compartilhar)
+    if (page.translate) {
+      page.translate.classList.remove('on', 'busy');
+      page.translate.setAttribute('aria-pressed', 'false');
+    }
+    syncSurfaces();
   }
 
   function side2Lines(side) {
@@ -669,14 +770,15 @@ const Lyrics = (function () {
         arr[i].classList.toggle('past', i < idx);
       }
     });
-    // Espelha o destaque no overlay, quando aberto
-    if (overlayOpen() && overlayLines.length) {
-      for (let i = 0; i < overlayLines.length; i++) {
-        overlayLines[i].classList.toggle('active', i === idx);
-        overlayLines[i].classList.toggle('past', i < idx);
+    // Espelha o destaque nas telas cheias abertas (overlay e página)
+    surfaces.forEach(s => {
+      if (!s.isOpen() || !s.lines.length) return;
+      for (let i = 0; i < s.lines.length; i++) {
+        s.lines[i].classList.toggle('active', i === idx);
+        s.lines[i].classList.toggle('past', i < idx);
       }
-      overlayActiveIdx = idx;
-    }
+      s.activeIdx = idx;
+    });
     ensureFollow();
   }
 
@@ -716,12 +818,35 @@ const Lyrics = (function () {
     const dt = Math.min(100, Math.max(1, ts - followLast));
     followLast = ts;
 
+    if (Date.now() < userScrollUntil) return; // usuário está lendo/rolando
+    progScrollUntil = Date.now() + 300;       // escritas nossas, não do usuário
+
+    // Telas cheias abertas acompanham a linha ativa, centralizada. Vêm
+    // primeiro porque são o que o usuário está vendo quando abertas — e
+    // não dependem do container pequeno ter linhas.
+    surfaces.forEach(s => {
+      if (!s.isOpen() || s.activeIdx < 0) return;
+      const sc = s.getScroll();
+      const sline = s.lines[s.activeIdx];
+      if (!sc || !sline) return;
+      const smax = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      const starget = Math.max(0, Math.min(
+        sline.offsetTop - sc.clientHeight / 2 + sline.clientHeight / 2, smax));
+      const sdiff = starget - sc.scrollTop;
+      if (Math.abs(sdiff) < 0.5) return;
+      if (reducedMotion.matches) { sc.scrollTop = starget; return; }
+      let sstep = sdiff * (1 - Math.exp(-dt / FOLLOW_TAU));
+      const smaxStep = FOLLOW_MAX_V * dt;
+      if (sstep > smaxStep) sstep = smaxStep;
+      else if (sstep < -smaxStep) sstep = -smaxStep;
+      sc.scrollTop += sstep;
+    });
+
     const vk = visibleSide();
     if (!vk) return;
     const box = els[vk].scroll;
     const line = lineEls[vk][activeIdx];
     if (!box || !line) return;
-    if (Date.now() < userScrollUntil) return; // usuário está lendo/rolando
 
     // Centraliza a linha ativa na área VISÍVEL (abaixo do cabeçalho fixo),
     // para que ela não fique escondida sob o header ao acompanhar.
@@ -734,7 +859,6 @@ const Lyrics = (function () {
     const diff = target - box.scrollTop;
     if (Math.abs(diff) < 0.5) return;
 
-    progScrollUntil = Date.now() + 300; // escrita nossa, não do usuário
     if (reducedMotion.matches) { box.scrollTop = target; return; }
 
     // Aproximação exponencial independente de frame-rate + teto de velocidade
@@ -743,26 +867,6 @@ const Lyrics = (function () {
     if (step > maxStep) step = maxStep;
     else if (step < -maxStep) step = -maxStep;
     box.scrollTop += step;
-
-    // Overlay aberto: acompanha a mesma linha ativa (centralizada)
-    if (overlayOpen() && overlayScroll && overlayActiveIdx >= 0) {
-      const oline = overlayLines[overlayActiveIdx];
-      if (oline) {
-        const oMax = Math.max(0, overlayScroll.scrollHeight - overlayScroll.clientHeight);
-        const oTarget = Math.max(0, Math.min(
-          oline.offsetTop - overlayScroll.clientHeight / 2 + oline.clientHeight / 2, oMax));
-        const oDiff = oTarget - overlayScroll.scrollTop;
-        if (Math.abs(oDiff) >= 0.5) {
-          if (reducedMotion.matches) overlayScroll.scrollTop = oTarget;
-          else {
-            let os = oDiff * (1 - Math.exp(-dt / FOLLOW_TAU));
-            const om = FOLLOW_MAX_V * dt;
-            if (os > om) os = om; else if (os < -om) os = -om;
-            overlayScroll.scrollTop += os;
-          }
-        }
-      }
-    }
   }
 
   // ---------------------------------------------------------------
@@ -785,6 +889,12 @@ const Lyrics = (function () {
     if (!key) return;
 
     const open = playerOpen();
+    // A tela cheia da letra vive por cima do player mobile: se o player
+    // fechou, virou desktop ou a letra foi desligada nas configurações,
+    // ela se fecha sozinha (rede de segurança — o caminho normal é o
+    // botão de fechar ou o closeExpanded do app.js).
+    if (pageOpen() && (!open || !openIsMobile() || !enabled())) closePage();
+
     // Reabriu o player após uma falha de rede: tenta de novo
     if (open && !wasOpen && cur && cur.transient) cur = null;
     wasOpen = open;
@@ -879,6 +989,7 @@ const Lyrics = (function () {
     eachSide(side => {
       if (side.translate) side.translate.classList.toggle('busy', busy);
     });
+    if (page.translate) page.translate.classList.toggle('busy', busy);
   }
   function setTranslateOn(on) {
     eachSide(side => {
@@ -886,6 +997,10 @@ const Lyrics = (function () {
       side.translate.classList.toggle('on', on);
       side.translate.setAttribute('aria-pressed', String(on));
     });
+    if (page.translate) {
+      page.translate.classList.toggle('on', on);
+      page.translate.setAttribute('aria-pressed', String(on));
+    }
   }
 
   function showPlain(text) {
@@ -900,13 +1015,16 @@ const Lyrics = (function () {
     });
     lineEls.exp = [];
     lineEls.mp = [];
-    syncOverlay();
+    // As telas cheias abertas mostram a MESMA tradução (fillSurface lê
+    // translated/translatedText, definidos antes da chamada)
+    surfaces.forEach(s => { if (s.isOpen()) fillSurface(s); });
   }
 
   async function toggleTranslate() {
     if (translated) {
       // Volta ao original
       translated = false;
+      translatedText = '';
       setTranslateOn(false);
       renderCurrent();
       return;
@@ -917,6 +1035,7 @@ const Lyrics = (function () {
     try {
       const tr = await translateText(text, uiLang());
       translated = true;
+      translatedText = tr;
       setTranslateBusy(false);
       setTranslateOn(true);
       showPlain(tr);
@@ -962,6 +1081,9 @@ const Lyrics = (function () {
     }, { passive: true });
 
     side.scroll.addEventListener('click', e => {
+      // MOBILE: o toque no container abre a letra em tela cheia (é lá que
+      // se busca um trecho). Sem letra, o toque não faz nada.
+      if (side === els.mp && canOpenPage()) return;
       const line = e.target && e.target.closest ? e.target.closest('.lyrics-line') : null;
       if (!line || !line.dataset.t) return;
       const t = parseFloat(line.dataset.t);
@@ -972,10 +1094,46 @@ const Lyrics = (function () {
   });
 
   // ---------------------------------------------------------------
+  // Interações da página de letra em tela cheia (mobile)
+  // ---------------------------------------------------------------
+  if (els.mp.box) {
+    // Toque em qualquer ponto do container (menos nos botões do cabeçalho)
+    els.mp.box.addEventListener('click', e => {
+      if (e.target && e.target.closest && e.target.closest('.lyrics-act')) return;
+      openPage();
+    });
+  }
+
+  if (page.root) {
+    if (page.close) page.close.addEventListener('click', closePage);
+    if (page.translate) page.translate.addEventListener('click', toggleTranslate);
+    if (page.share) page.share.addEventListener('click', shareLyrics);
+
+    if (page.scroll) {
+      page.scroll.addEventListener('wheel', markUserScroll, { passive: true });
+      page.scroll.addEventListener('touchstart', markUserScroll, { passive: true });
+      page.scroll.addEventListener('touchmove', markUserScroll, { passive: true });
+      page.scroll.addEventListener('scroll', () => {
+        if (Date.now() > progScrollUntil) markUserScroll();
+      }, { passive: true });
+
+      // Tocar numa linha busca aquele instante da faixa
+      page.scroll.addEventListener('click', e => {
+        const line = e.target && e.target.closest ? e.target.closest('.lyrics-line') : null;
+        if (!line || !line.dataset.t) return;
+        const t = parseFloat(line.dataset.t);
+        if (!isFinite(t)) return;
+        userScrollUntil = 0;
+        try { if (typeof seekToTime === 'function') seekToTime(t); } catch (_) {}
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------
   // Boot
   // ---------------------------------------------------------------
   applyVisibility();
   setInterval(tick, 350);
 
-  return { enabled, setEnabled, applyVisibility };
+  return { enabled, setEnabled, applyVisibility, pageOpen, closePage };
 })();
